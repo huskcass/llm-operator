@@ -88,10 +88,12 @@ spec:
                 - serviceId
                 type: object
               maxReplicas:
-                description: maxReplicas is the upper limit for the number of replicas
-                  to which the autoscaler can scale up
+                description: |-
+                  maxReplicas is the upper limit for the number of replicas to which the
+                  autoscaler can scale up. 0 pins the fleet at zero replicas, which
+                  combined with minReplicas: 0 disables scaling entirely.
                 format: int32
-                minimum: 1
+                minimum: 0
                 type: integer
               metricProvider:
                 default: Prometheus

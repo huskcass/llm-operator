@@ -221,8 +221,10 @@ type LLMScalerSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	MinReplicas int32 `json:"minReplicas"`
 
-	// maxReplicas is the upper limit for the number of replicas to which the autoscaler can scale up
-	// +kubebuilder:validation:Minimum=1
+	// maxReplicas is the upper limit for the number of replicas to which the
+	// autoscaler can scale up. 0 pins the fleet at zero replicas, which
+	// combined with minReplicas: 0 disables scaling entirely.
+	// +kubebuilder:validation:Minimum=0
 	MaxReplicas int32 `json:"maxReplicas"`
 
 	// metrics contains the specifications for which to use to calculate the
