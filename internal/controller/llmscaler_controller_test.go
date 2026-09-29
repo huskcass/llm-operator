@@ -236,6 +236,82 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		})
 
+		It("should scale down to zero when minReplicas is 0", func() {
+			By("lowering the scaler's minReplicas to 0")
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Spec.MinReplicas = 0
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+
+			By("setting the Deployment to 2 replicas, fully rolled out")
+			d := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, d)).To(Succeed())
+			var two int32 = 2
+			d.Spec.Replicas = &two
+			Expect(k8sClient.Update(ctx, d)).To(Succeed())
+			d.Status.ObservedGeneration = d.Generation
+			d.Status.Replicas = two
+			d.Status.UpdatedReplicas = two
+			d.Status.ReadyReplicas = two
+			d.Status.AvailableReplicas = two
+			Expect(k8sClient.Status().Update(ctx, d)).To(Succeed())
+
+			mockValue = "0" // idle -> wants zero
+
+			By("running the Reconciler")
+			controllerReconciler := &LLMScalerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("checking it scaled down to zero")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, d)).To(Succeed())
+			// desired = ceil(2 * 0/0.5) = 0, clamped to minReplicas (0).
+			Expect(*d.Spec.Replicas).To(Equal(int32(0)))
+		})
+
+		It("should wake the fleet from zero when the metric turns positive", func() {
+			By("lowering the scaler's minReplicas to 0 and parking the Deployment at 0")
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Spec.MinReplicas = 0
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+
+			d := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, d)).To(Succeed())
+			var zero int32 = 0
+			d.Spec.Replicas = &zero
+			Expect(k8sClient.Update(ctx, d)).To(Succeed())
+			d.Status.ObservedGeneration = d.Generation
+			d.Status.Replicas = zero
+			d.Status.UpdatedReplicas = zero
+			d.Status.ReadyReplicas = zero
+			d.Status.AvailableReplicas = zero
+			Expect(k8sClient.Status().Update(ctx, d)).To(Succeed())
+
+			mockValue = "0.85" // load arrives while the fleet is at zero
+
+			By("running the Reconciler")
+			controllerReconciler := &LLMScalerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("checking the fleet woke up")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, d)).To(Succeed())
+			// desired = ceil(1 * 0.85/0.5) = 2 against the single-replica
+			// baseline, not ceil(0 * 0.85/0.5) = 0.
+			Expect(*d.Spec.Replicas).To(Equal(int32(2)))
+		})
+
 		// unsettledAtFive puts the Deployment at 5 replicas, fully rolled out (so the
 		// rollout guard doesn't fire and mask the settle guard), with the given
 		// readyReplicas and terminatingReplicas, and an idle metric.
@@ -845,6 +921,58 @@ func TestComputeDesiredFromMetricsNonFinite(t *testing.T) {
 		}
 		srv.Close()
 	}
+}
+
+// TestComputeDesiredFromMetricsScaleFromZero pins the scale-from-zero rule:
+// with no ready replicas the HPA-style ratio is evaluated against a
+// single-replica baseline, so a positive signal wakes the fleet instead of
+// computing ceil(0 * ratio) = 0 forever. A zero signal still recommends 0.
+func TestComputeDesiredFromMetricsScaleFromZero(t *testing.T) {
+	newServer := func(value string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(fmt.Appendf(nil,
+				`{"status":"success","data":{"result":[{"metric":{},"value":[0,"%s"]}]}}`, value))
+		}))
+	}
+	newScaler := func(srv *httptest.Server) *autoscalingv1alpha1.LLMScaler {
+		return &autoscalingv1alpha1.LLMScaler{
+			Spec: autoscalingv1alpha1.LLMScalerSpec{
+				ServerAddress: srv.URL,
+				MinReplicas:   0,
+				MaxReplicas:   5,
+				Metrics: []autoscalingv1alpha1.MetricSpec{
+					{Name: "queue", Query: "sum(queue_depth)", Target: "0.5"},
+				},
+			},
+		}
+	}
+
+	t.Run("positive signal wakes the fleet", func(t *testing.T) {
+		srv := newServer("0.85")
+		defer srv.Close()
+		r := &LLMScalerReconciler{}
+		desired, haveMetric := r.computeDesiredFromMetrics(context.Background(), newScaler(srv), 0)
+		if !haveMetric {
+			t.Fatal("haveMetric = false, want true (the query returned a value)")
+		}
+		// ceil(1 * 0.85/0.5) = 2, not ceil(0 * 0.85/0.5) = 0.
+		if desired != 2 {
+			t.Errorf("desired = %d, want 2 (single-replica baseline at zero)", desired)
+		}
+	})
+
+	t.Run("zero signal recommends zero", func(t *testing.T) {
+		srv := newServer("0")
+		defer srv.Close()
+		r := &LLMScalerReconciler{}
+		desired, haveMetric := r.computeDesiredFromMetrics(context.Background(), newScaler(srv), 0)
+		if !haveMetric {
+			t.Fatal("haveMetric = false, want true (the query returned a value)")
+		}
+		if desired != 0 {
+			t.Errorf("desired = %d, want 0 (idle fleet stays at zero)", desired)
+		}
+	})
 }
 
 // TestScaleGuard unit-tests the scale-down rate limiter.

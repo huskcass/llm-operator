@@ -212,8 +212,13 @@ type LLMScalerSpec struct {
 	// +optional
 	RetryPeriodSeconds int32 `json:"retryPeriodSeconds,omitempty"`
 
-	// minReplicas is the lower limit for the number of replicas to which the autoscaler can scale down
-	// +kubebuilder:validation:Minimum=1
+	// minReplicas is the lower limit for the number of replicas to which the
+	// autoscaler can scale down. 0 enables scale-to-zero: an idle target is
+	// scaled all the way down, and wakes back up when a metric evaluates to a
+	// positive recommendation (under the Prometheus provider the ratio is then
+	// computed against a single-replica baseline, since a fleet of zero has no
+	// per-replica measurement to scale off).
+	// +kubebuilder:validation:Minimum=0
 	MinReplicas int32 `json:"minReplicas"`
 
 	// maxReplicas is the upper limit for the number of replicas to which the autoscaler can scale up

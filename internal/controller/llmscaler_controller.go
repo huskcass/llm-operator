@@ -485,7 +485,15 @@ func (r *LLMScalerReconciler) computeDesiredFromMetrics(ctx context.Context, sca
 		}
 
 		ratio := currentValue / targetValue
-		metricDesired := int32(math.Ceil(float64(readyReplicas) * ratio))
+		// The HPA-style ratio needs a per-replica baseline, but a fleet scaled
+		// to zero has no ready replicas to scale off — readyReplicas * ratio is
+		// then 0 no matter what the metric says, and the fleet could never
+		// wake up. Evaluate against a single-replica baseline instead, so a
+		// positive signal (queue depth, pending requests) recommends ceil of
+		// the ratio and brings the fleet back. This only changes the at-zero
+		// case: otherwise the Reconcile fallback already set readyReplicas to
+		// specReplicas, which is >= 1.
+		metricDesired := int32(math.Ceil(float64(max(readyReplicas, 1)) * ratio))
 		logger.Info("Metric calculation", "name", metric.Name, "query", metric.Query, "current", currentValue, "target", targetValue, "calculatedDesired", metricDesired)
 
 		haveMetric = true
