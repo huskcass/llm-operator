@@ -44,6 +44,10 @@ const (
 	// decisionNamespace is the namespace the fake decision server reports in
 	// its decisions.
 	decisionNamespace = "modelforge"
+
+	// mockMetricValue is the sample the fake Prometheus serves; over the
+	// 0.5 target it always recommends scaling up.
+	mockMetricValue = "0.85"
 )
 
 var _ = Describe("LLMScaler Controller", func() {
@@ -67,7 +71,7 @@ var _ = Describe("LLMScaler Controller", func() {
 		var mockValue string
 
 		BeforeEach(func() {
-			mockValue = "0.85"
+			mockValue = mockMetricValue
 			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(fmt.Appendf(nil,
@@ -293,7 +297,7 @@ var _ = Describe("LLMScaler Controller", func() {
 			d.Status.AvailableReplicas = zero
 			Expect(k8sClient.Status().Update(ctx, d)).To(Succeed())
 
-			mockValue = "0.85" // load arrives while the fleet is at zero
+			mockValue = mockMetricValue // load arrives while the fleet is at zero
 
 			By("running the Reconciler")
 			controllerReconciler := &LLMScalerReconciler{
@@ -428,7 +432,7 @@ var _ = Describe("LLMScaler Controller", func() {
 			deploy.Status.TerminatingReplicas = &terminating
 			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
 
-			mockValue = "0.85" // over the 0.5 target -> wants more replicas
+			mockValue = mockMetricValue // over the 0.5 target -> wants more replicas
 
 			controllerReconciler := &LLMScalerReconciler{
 				Client: k8sClient,
@@ -948,7 +952,7 @@ func TestComputeDesiredFromMetricsScaleFromZero(t *testing.T) {
 	}
 
 	t.Run("positive signal wakes the fleet", func(t *testing.T) {
-		srv := newServer("0.85")
+		srv := newServer(mockMetricValue)
 		defer srv.Close()
 		r := &LLMScalerReconciler{}
 		desired, haveMetric := r.computeDesiredFromMetrics(context.Background(), newScaler(srv), 0)
