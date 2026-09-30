@@ -77,7 +77,7 @@ The target is looked up **in the `LLMScaler`'s own namespace** — `targetRef` h
 | `serverAddress` | string | ✔ | — | Metric source endpoint. Under `Prometheus`, the query API (e.g. `http://prometheus-operated.monitoring.svc:9090`) — queries go to `{serverAddress}/api/v1/query`. Under `Custom`, the decision server's base URL. |
 | `serverHeaders` | map[string]string | | — | Extra HTTP headers sent with every metric fetch (e.g. `Authorization`). Values are used verbatim. |
 | `minReplicas` | int32 | ✔ | — | Lower bound. Minimum `0` — set it to `0` for scale-to-zero. |
-| `maxReplicas` | int32 | ✔ | — | Upper bound. Minimum `1`. |
+| `maxReplicas` | int32 | ✔ | — | Upper bound. Minimum `0` — `0` pins the fleet at zero replicas (with `minReplicas: 0` this disables scaling entirely). |
 | `metrics` | []object | ✔ under `Prometheus` | — | Metrics driving the replica count; the **largest** recommendation across entries wins. Rejected as empty under `Prometheus`, unused under `Custom`. See below. |
 | `syncPeriodSeconds` | int32 | | `15` | Interval between metric evaluations (the `RequeueAfter` that paces each scale step). |
 | `retryPeriodSeconds` | int32 | | `10` | Requeue interval used instead of `syncPeriodSeconds` when the target is missing or a sync errors. |
