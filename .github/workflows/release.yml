@@ -1,10 +1,9 @@
-# Publish: the operator image and the Helm chart, at one version. The chart is
-# packaged pointing at the image pushed beside it
-# (manager.image.repository, appVersion).
+# Publish: the operator image and the Helm chart, at one version.
 #
-#   push to main   <appVersion>-git<sha7>
-#   tag v<X>       <X>, which must be dist/chart/Chart.yaml's appVersion; the image is also latest
-#   pull request   build, lint and package; nothing pushed
+#   push to main      <appVersion>-git<sha7>
+#   tag v<X>          <X>, which must be dist/chart/Chart.yaml's appVersion; the image is also latest
+#   pull request      build, lint and package; nothing pushed
+#   workflow_dispatch build, lint and package; nothing pushed
 #
 # The image goes to Docker Hub (4pdosc/llm-operator) and to GHCR
 # (ghcr.io/<owner>/llm-operator); the chart goes to the GHCR OCI registry.
@@ -40,7 +39,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      PUSH: ${{ github.event_name != 'pull_request' }}
+      PUSH: ${{ github.event_name == 'push' }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v7
@@ -79,7 +78,6 @@ jobs:
           fi
           {
             echo "version=$version"
-            echo "image=$ghcr_image"
             echo "tags=$tags"
             echo "charts=oci://ghcr.io/$owner/charts"
           } >>"$GITHUB_OUTPUT"
@@ -127,13 +125,8 @@ jobs:
       - name: Package the chart
         env:
           VERSION: ${{ steps.v.outputs.version }}
-          IMAGE: ${{ steps.v.outputs.image }}
         run: |
           set -eu
-          sed "s|^    repository: .*/llm-operator$|    repository: $IMAGE|" dist/chart/values.yaml >values.tmp
-          mv values.tmp dist/chart/values.yaml
-          grep -q "^    repository: $IMAGE\$" dist/chart/values.yaml \
-            || { echo "manager.image.repository in dist/chart/values.yaml was not repointed at $IMAGE" >&2; exit 1; }
           helm lint --strict dist/chart
           helm package dist/chart --version "$VERSION" --app-version "$VERSION" --destination dist
 
