@@ -44,6 +44,15 @@ const (
 	ReasonApplyFailed = "ApplyFailed"
 	// ReasonChartResolveFailed means spec.chart.version could not be resolved.
 	ReasonChartResolveFailed = "ChartResolveFailed"
+	// ReasonPendingRelease means a pending helm release belongs to another
+	// client. The controller does not write to it.
+	ReasonPendingRelease = "PendingRelease"
+	// ReasonOperationInProgress means this object owns a pending helm release
+	// that is not yet old enough to recover.
+	ReasonOperationInProgress = "OperationInProgress"
+	// ReasonRecoveredPendingRelease means a stale pending helm release owned
+	// by this object was rolled back or uninstalled so apply could continue.
+	ReasonRecoveredPendingRelease = "RecoveredPendingRelease"
 	// ReasonSuspended means spec.suspend stopped reconciliation.
 	ReasonSuspended = "Suspended"
 
@@ -265,6 +274,14 @@ type LLMServiceStatus struct {
 	// appliedHash is a digest over status.chart and the merged layers.
 	// +optional
 	AppliedHash string `json:"appliedHash,omitempty"`
+
+	// releaseUID is the UID of the LLMService that claimed this helm release.
+	// The controller writes it before install, and again on adopt and on every
+	// successful apply. Ownership is this value equal to metadata.uid, or the
+	// release label serving.modelsphere.dev/llmservice-uid equal to that uid.
+	// A later condition change does not drop the claim.
+	// +optional
+	ReleaseUID string `json:"releaseUID,omitempty"`
 
 	// helm is the release revision and status last observed.
 	// +optional

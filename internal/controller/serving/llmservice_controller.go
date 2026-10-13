@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -46,11 +47,21 @@ import (
 
 const (
 	llmserviceLabel       = "serving.modelsphere.dev/llmservice"
+	llmserviceUIDLabel    = "serving.modelsphere.dev/llmservice-uid"
 	credentialUsernameKey = "username"
 	credentialPasswordKey = "password"
 	actionAnnotation      = servingv1alpha1.SwissAnnotationPrefix + "action"
 	// statusDeployed is the helm release status adoption accepts.
-	statusDeployed = "deployed"
+	statusDeployed        = "deployed"
+	statusFailed          = "failed"
+	statusPendingInstall  = "pending-install"
+	statusPendingUpgrade  = "pending-upgrade"
+	statusPendingRollback = "pending-rollback"
+	minPendingRequeue     = 15 * time.Second
+	pendingForeignRequeue = time.Minute
+	// DefaultPendingTimeout is how long an owned pending release is left alone
+	// before recovery. It is twice the helm apply timeout.
+	DefaultPendingTimeout = 2 * helm.ApplyTimeout
 )
 
 // VersionLister lists chart versions for spec.chart. Tests set it.
@@ -64,7 +75,10 @@ type LLMServiceReconciler struct {
 	Helm         helm.Helm
 	Recorder     events.EventRecorder
 	HistoryLimit int
-	ListVersions VersionLister
+	// PendingTimeout is how long an owned pending release may stay pending
+	// before recovery. Zero uses DefaultPendingTimeout.
+	PendingTimeout time.Duration
+	ListVersions   VersionLister
 }
 
 // +kubebuilder:rbac:groups=serving.modelsphere.dev,resources=llmservices,verbs=get;list;watch;create;update;patch;delete
@@ -165,6 +179,14 @@ func (r *LLMServiceReconciler) reconcileApply(ctx context.Context, obj *servingv
 	if err != nil {
 		return r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonApplyFailed, err, true)
 	}
+	if rel != nil && pendingStatus(rel.Status) {
+		var stop bool
+		var result ctrl.Result
+		rel, result, stop, err = r.reconcilePending(ctx, obj, rel)
+		if err != nil || stop {
+			return result, err
+		}
+	}
 	if rel != nil && obj.Status.AppliedHash == "" && len(obj.Status.History) == 0 {
 		return r.reconcileUnowned(ctx, obj, ver, values, hash, creds, rel)
 	}
@@ -172,21 +194,124 @@ func (r *LLMServiceReconciler) reconcileApply(ctx context.Context, obj *servingv
 }
 
 // reconcileUnowned handles a release this object has never recorded.
-// Only a deployed release can be adopted. A release left failed by our own
-// install is upgraded. Anything else is drift and is not retried.
+// An owned release is applied. Only a deployed release can be adopted.
+// Anything else is drift and is not retried.
 func (r *LLMServiceReconciler) reconcileUnowned(ctx context.Context, obj *servingv1alpha1.LLMService, ver string, values map[string]any, hash string, creds *helm.Credentials, rel *helm.Release) (ctrl.Result, error) {
+	if ownedBy(obj, rel) {
+		return r.apply(ctx, obj, ver, values, hash, creds, rel)
+	}
 	if rel.Status != statusDeployed {
-		if ownApplyFailed(obj) {
-			return r.apply(ctx, obj, ver, values, hash, creds, rel)
-		}
 		return r.drift(ctx, obj, fmt.Sprintf("release is %s, not deployed", rel.Status))
 	}
 	return r.adopt(ctx, obj, ver, values, hash, rel)
 }
 
-func ownApplyFailed(obj *servingv1alpha1.LLMService) bool {
-	cond := meta.FindStatusCondition(obj.Status.Conditions, servingv1alpha1.ConditionApplied)
-	return cond != nil && cond.Reason == servingv1alpha1.ReasonApplyFailed
+// reconcilePending handles a pending-* release. stop reports that result is
+// the reconcile outcome. Otherwise rel is the release apply should see: nil
+// after an uninstall, or the existing release after a rollback.
+func (r *LLMServiceReconciler) reconcilePending(ctx context.Context, obj *servingv1alpha1.LLMService, rel *helm.Release) (*helm.Release, ctrl.Result, bool, error) {
+	if !ownedBy(obj, rel) {
+		result, err := r.pendingForeign(ctx, obj, rel)
+		return nil, result, true, err
+	}
+	timeout := r.pendingTimeout()
+	age := max(time.Since(rel.Updated), 0)
+	if age < timeout {
+		remaining := max(timeout-age, minPendingRequeue)
+		result, err := r.operationInProgress(ctx, obj, rel, remaining)
+		return nil, result, true, err
+	}
+	next, err := r.recoverPending(ctx, obj, rel)
+	if err != nil {
+		result, ferr := r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonApplyFailed, err, true)
+		return nil, result, true, ferr
+	}
+	return next, ctrl.Result{}, false, nil
+}
+
+func (r *LLMServiceReconciler) pendingForeign(ctx context.Context, obj *servingv1alpha1.LLMService, rel *helm.Release) (ctrl.Result, error) {
+	msg := fmt.Sprintf("release is %s; another client is operating on it", rel.Status)
+	obj.Status.Phase = servingv1alpha1.PhaseFailed
+	obj.Status.Message = msg
+	obj.Status.ObservedGeneration = obj.Generation
+	meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+		Type:               servingv1alpha1.ConditionApplied,
+		Status:             metav1.ConditionFalse,
+		Reason:             servingv1alpha1.ReasonPendingRelease,
+		Message:            msg,
+		ObservedGeneration: obj.Generation,
+	})
+	if err := r.updateStatus(ctx, obj); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: pendingForeignRequeue}, nil
+}
+
+func (r *LLMServiceReconciler) operationInProgress(ctx context.Context, obj *servingv1alpha1.LLMService, rel *helm.Release, after time.Duration) (ctrl.Result, error) {
+	msg := fmt.Sprintf("release is %s; operation in progress", rel.Status)
+	obj.Status.Phase = servingv1alpha1.PhaseApplying
+	obj.Status.Message = msg
+	meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+		Type:               servingv1alpha1.ConditionApplied,
+		Status:             metav1.ConditionFalse,
+		Reason:             servingv1alpha1.ReasonOperationInProgress,
+		Message:            msg,
+		ObservedGeneration: obj.Generation,
+	})
+	if err := r.updateStatus(ctx, obj); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: after}, nil
+}
+
+// recoverPending clears a stale owned pending release. pending-install is
+// uninstalled. pending-upgrade and pending-rollback roll back to the newest
+// deployed revision, or are uninstalled when history has none.
+func (r *LLMServiceReconciler) recoverPending(ctx context.Context, obj *servingv1alpha1.LLMService, rel *helm.Release) (*helm.Release, error) {
+	msg := fmt.Sprintf("recovered stale %s release", rel.Status)
+	obj.Status.Phase = servingv1alpha1.PhaseApplying
+	obj.Status.Message = msg
+	obj.Status.ReleaseUID = string(obj.UID)
+	meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+		Type:               servingv1alpha1.ConditionApplied,
+		Status:             metav1.ConditionFalse,
+		Reason:             servingv1alpha1.ReasonRecoveredPendingRelease,
+		Message:            msg,
+		ObservedGeneration: obj.Generation,
+	})
+	if err := r.updateStatus(ctx, obj); err != nil {
+		return nil, err
+	}
+	next, err := r.rollPending(ctx, obj, rel)
+	if err != nil {
+		return nil, err
+	}
+	r.event(obj, corev1.EventTypeNormal, servingv1alpha1.ReasonRecoveredPendingRelease, msg)
+	logf.FromContext(ctx).Info("Recovered pending helm release", "status", rel.Status)
+	return next, nil
+}
+
+func (r *LLMServiceReconciler) rollPending(ctx context.Context, obj *servingv1alpha1.LLMService, rel *helm.Release) (*helm.Release, error) {
+	if rel.Status == statusPendingInstall {
+		if err := r.Helm.Uninstall(ctx, obj.Namespace, obj.Name); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	rev, err := r.deployedRevision(ctx, obj)
+	if err != nil {
+		return nil, err
+	}
+	if rev == 0 {
+		if err := r.Helm.Uninstall(ctx, obj.Namespace, obj.Name); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err := r.Helm.Rollback(ctx, obj.Namespace, obj.Name, rev); err != nil {
+		return nil, err
+	}
+	return rel, nil
 }
 
 func (r *LLMServiceReconciler) adopt(ctx context.Context, obj *servingv1alpha1.LLMService, ver string, values map[string]any, hash string, rel *helm.Release) (ctrl.Result, error) {
@@ -223,19 +348,35 @@ func (r *LLMServiceReconciler) drift(ctx context.Context, obj *servingv1alpha1.L
 }
 
 func (r *LLMServiceReconciler) apply(ctx context.Context, obj *servingv1alpha1.LLMService, ver string, values map[string]any, hash string, creds *helm.Credentials, existing *helm.Release) (ctrl.Result, error) {
-	// Applying is in progress. Keep observedGeneration at the last completed generation.
+	// An owned failed release with no deployed revision is installed again.
+	// One that still has a deployed revision is upgraded.
+	install, err := r.shouldInstall(ctx, obj, existing)
+	if err != nil {
+		obj.Status.ReleaseUID = string(obj.UID)
+		return r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonApplyFailed, err, true)
+	}
+	// Claim the release before Install, including the uninstall that precedes
+	// a retry of a failed first install. observedGeneration stays at the last
+	// completed generation while Applying.
 	obj.Status.Phase = servingv1alpha1.PhaseApplying
+	obj.Status.ReleaseUID = string(obj.UID)
 	if err := r.updateStatus(ctx, obj); err != nil {
 		return ctrl.Result{}, err
+	}
+	if install && existing != nil {
+		if err := r.Helm.Uninstall(ctx, obj.Namespace, obj.Name); err != nil {
+			return r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonApplyFailed, err, true)
+		}
+		existing = nil
 	}
 	ref := helm.ChartRef{Repo: obj.Spec.Chart.Repo, Name: obj.Spec.Chart.Name, Version: ver}
 	opts := helm.ApplyOpts{
 		ForceConflicts: obj.Annotations[servingv1alpha1.AnnotationForceConflicts] == strconv.FormatInt(obj.Generation, 10),
 		Credentials:    creds,
+		Labels:         releaseLabels(obj),
 	}
 	var (
 		rel    *helm.Release
-		err    error
 		reason string
 	)
 	if existing == nil {
@@ -311,6 +452,7 @@ func (r *LLMServiceReconciler) recordSuccess(ctx context.Context, obj *servingv1
 		obj.Status.History = obj.Status.History[:limit]
 	}
 	obj.Status.AppliedHash = hash
+	obj.Status.ReleaseUID = string(obj.UID)
 	obj.Status.Chart = servingv1alpha1.ChartStatus{Name: chartName, Version: chartVersion}
 	obj.Status.Helm = servingv1alpha1.HelmStatus{Revision: rel.Revision, Status: rel.Status}
 	obj.Status.Phase = servingv1alpha1.PhaseApplied
@@ -435,6 +577,44 @@ func (r *LLMServiceReconciler) historyLimit() int {
 	return r.HistoryLimit
 }
 
+func (r *LLMServiceReconciler) pendingTimeout() time.Duration {
+	if r.PendingTimeout <= 0 {
+		return DefaultPendingTimeout
+	}
+	return r.PendingTimeout
+}
+
+// shouldInstall reports whether apply must install. A missing release is
+// installed. An owned failed release is installed again when no revision is
+// deployed, and upgraded when one is.
+func (r *LLMServiceReconciler) shouldInstall(ctx context.Context, obj *servingv1alpha1.LLMService, existing *helm.Release) (bool, error) {
+	if existing == nil {
+		return true, nil
+	}
+	if existing.Status != statusFailed || !ownedBy(obj, existing) {
+		return false, nil
+	}
+	rev, err := r.deployedRevision(ctx, obj)
+	if err != nil {
+		return false, err
+	}
+	return rev == 0, nil
+}
+
+func (r *LLMServiceReconciler) deployedRevision(ctx context.Context, obj *servingv1alpha1.LLMService) (int, error) {
+	hist, err := r.Helm.History(ctx, obj.Namespace, obj.Name)
+	if err != nil {
+		return 0, err
+	}
+	rev := 0
+	for _, rel := range hist {
+		if rel.Status == statusDeployed && rel.Revision > rev {
+			rev = rel.Revision
+		}
+	}
+	return rev, nil
+}
+
 func (r *LLMServiceReconciler) event(obj client.Object, eventType, reason, msg string) {
 	if r.Recorder == nil {
 		return
@@ -448,6 +628,36 @@ func (r *LLMServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&servingv1alpha1.LLMService{}, builder.WithPredicates(llmServicePredicate{})).
 		Named("serving-llmservice").
 		Complete(r)
+}
+
+// ownedBy reports whether rel belongs to obj. The release label is durable
+// across status changes. status.releaseUID covers the window before Install
+// stores that label, and a status that survived a lost release secret.
+func ownedBy(obj *servingv1alpha1.LLMService, rel *helm.Release) bool {
+	uid := string(obj.UID)
+	if uid == "" {
+		return false
+	}
+	if rel != nil && rel.Labels[llmserviceUIDLabel] == uid {
+		return true
+	}
+	return obj.Status.ReleaseUID != "" && obj.Status.ReleaseUID == uid
+}
+
+func releaseLabels(obj *servingv1alpha1.LLMService) map[string]string {
+	return map[string]string{
+		llmserviceLabel:    obj.Name,
+		llmserviceUIDLabel: string(obj.UID),
+	}
+}
+
+func pendingStatus(status string) bool {
+	switch status {
+	case statusPendingInstall, statusPendingUpgrade, statusPendingRollback:
+		return true
+	default:
+		return false
+	}
 }
 
 func swissAnnotations(in map[string]string) map[string]string {

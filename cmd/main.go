@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -86,11 +87,14 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	var llmserviceHistoryLimit int
 	var llmserviceChartCacheDir string
+	var llmservicePendingTimeout time.Duration
 	flag.IntVar(&llmserviceHistoryLimit, "llmservice-history-limit", servingv1alpha1.DefaultHistoryLimit,
 		"Maximum status.history entries kept for each LLMService.")
 	flag.StringVar(&llmserviceChartCacheDir, "llmservice-chart-cache-dir",
 		filepath.Join(os.TempDir(), "llm-operator-charts"),
 		"Directory for Helm charts cached by the LLMService controller.")
+	flag.DurationVar(&llmservicePendingTimeout, "llmservice-pending-timeout", servingcontroller.DefaultPendingTimeout,
+		"How long an owned pending Helm release is left in progress before LLMService recovers it.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -198,11 +202,12 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&servingcontroller.LLMServiceReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Helm:         helm.New(mgr.GetConfig(), llmserviceChartCacheDir),
-		Recorder:     mgr.GetEventRecorder("llmservice"),
-		HistoryLimit: llmserviceHistoryLimit,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Helm:           helm.New(mgr.GetConfig(), llmserviceChartCacheDir),
+		Recorder:       mgr.GetEventRecorder("llmservice"),
+		HistoryLimit:   llmserviceHistoryLimit,
+		PendingTimeout: llmservicePendingTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "serving-llmservice")
 		os.Exit(1)

@@ -324,6 +324,14 @@ spec:
                 - Applied
                 - Failed
                 type: string
+              releaseUID:
+                description: |-
+                  releaseUID is the UID of the LLMService that claimed this helm release.
+                  The controller writes it before install, and again on adopt and on every
+                  successful apply. Ownership is this value equal to metadata.uid, or the
+                  release label serving.modelsphere.dev/llmservice-uid equal to that uid.
+                  A later condition change does not drop the claim.
+                type: string
             type: object
         required:
         - spec

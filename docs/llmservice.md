@@ -14,23 +14,34 @@
 | `spec.model` | Descriptive only. Not rendered into the chart. |
 | `spec.suspend` | Stop reconciling. Status, including a finalizer, stays as it was. A suspended object is not uninstalled while it is deleting. |
 
-`status.appliedHash` is `sha256:` plus the hex SHA-256 of the JSON object `{chart:{name,version}, values}` with sorted keys. `status.history` is newest first.
+`status.appliedHash` is `sha256:` plus the hex SHA-256 of the JSON object `{chart:{name,version}, values}` with sorted keys. `status.history` is newest first. `status.releaseUID` is the UID of the LLMService that claimed the release.
+
+A release is owned when its Helm label `serving.modelsphere.dev/llmservice-uid` equals the object UID, or when `status.releaseUID` equals that UID. Install and Upgrade set that label and `serving.modelsphere.dev/llmservice=<name>` on the release. `status.releaseUID` is written before Install, and again on adopt and on every successful apply. Condition reasons are not ownership. A chart-list, credentials, or Helm read error retries with backoff and does not decide Drift.
 
 ## Reconcile
 
 1. `spec.suspend` is true: return without writing status or calling Helm.
 2. The object is deleting. `serving.modelsphere.dev/deletion-policy: Orphan` drops the finalizer and leaves the release. Otherwise the release is uninstalled (a missing release is fine) and then the finalizer is dropped.
 3. Add finalizer `serving.modelsphere.dev/finalizer`.
-4. Resolve `spec.chart.version` with the same rule as swiss `chart.Resolve`: an exact version, else the pinned `status.chart.version` while the range allows it, else the newest version the repository lists. A resolve error sets `phase: Failed`, condition `Applied=False` reason `ChartResolveFailed`, and retries with backoff.
+4. Resolve `spec.chart.version` with the same rule as swiss `chart.Resolve`: an exact version, else the pinned `status.chart.version` while the range allows it, else the newest version the repository lists. A resolve error, including a missing credentials Secret, sets `phase: Failed`, condition `Applied=False` reason `ChartResolveFailed`, and retries with backoff.
 5. Merge layers and hash them with the resolved chart. The same hash as `status.appliedHash` sets `phase: Applied` and `observedGeneration` when those are stale, then stops. No new history entry.
-6. If a `deployed` release exists and this object has never applied (`appliedHash` empty and `history` empty), adopt it. The release chart name, chart version, and user-supplied values must equal the resolved chart and merged layers after a JSON round trip. Equal: record `appliedHash`, `Adopted=True` reason `Adopted`, `Applied=True` reason `Adopted`, a history entry, and a ControllerRevision. No Helm install or upgrade. Not equal: `phase: Failed`, `Adopted=False` reason `Drift`, message names chart and/or values. No upgrade, and no requeue; the next spec change tries again. A release that is not `deployed` is not adopted. If `Applied` is already `ApplyFailed`, the controller upgrades that release. Otherwise it sets `phase: Failed`, `Adopted=False` reason `Drift`, message `release is <status>, not deployed`, and does not requeue.
-7. Otherwise set `phase: Applying` and leave `observedGeneration` at the last completed generation, then install or upgrade through the Helm SDK with server-side apply and no resource wait (`HookOnlyStrategy`, the same outcome as `wait: false`). `serving.modelsphere.dev/force-conflicts` equal to the current generation sets Helm `ForceConflicts` for that apply and records `forceConflicts` on the history entry. Any other value is ignored.
+6. Get the release. An error sets `phase: Failed`, `Applied=False` reason `ApplyFailed`, and retries with backoff.
+7. A `pending-install`, `pending-upgrade`, or `pending-rollback` release is not upgraded in place. Age is the release's last-deployed time.
+   - Not owned: `phase: Failed`, `Applied=False` reason `PendingRelease`, message `release is <status>; another client is operating on it`, requeue after 1m. No Helm write.
+   - Owned and younger than `--llmservice-pending-timeout` (default 10m, twice the 5m Helm timeout): `phase: Applying`, `Applied=False` reason `OperationInProgress`, requeue after the time remaining, at least 15s. No Helm write.
+   - Owned and older: recover, record reason `RecoveredPendingRelease` and emit that event, then apply in the same reconcile. `pending-install` is uninstalled and installed. `pending-upgrade` and `pending-rollback` roll back to the newest `deployed` revision, or are uninstalled and installed when history has none.
+8. If `appliedHash` and `history` are empty and a release exists:
+   - Owned and `deployed`: upgrade. This is a successful install whose status was wiped.
+   - Owned and `failed`: upgrade when some revision is `deployed`; otherwise uninstall and install.
+   - Not owned and `deployed`: adopt. The release chart name, chart version, and user-supplied values must equal the resolved chart and merged layers after a JSON round trip. Equal: record `appliedHash`, `status.releaseUID`, `Adopted=True` reason `Adopted`, `Applied=True` reason `Adopted`, a history entry, and a ControllerRevision. No Helm install or upgrade. Not equal: `phase: Failed`, `Adopted=False` reason `Drift`, message names chart and/or values. No upgrade, and no requeue; the next spec change tries again.
+   - Not owned and anything else: `phase: Failed`, `Adopted=False` reason `Drift`, message `release is <status>, not deployed`. No requeue.
+9. Otherwise set `phase: Applying`, write `status.releaseUID`, and leave `observedGeneration` at the last completed generation, then install or upgrade. An owned `failed` release uses the same rule as step 8 before the upgrade. Helm uses server-side apply and no resource wait (`HookOnlyStrategy`, the same outcome as `wait: false`). `serving.modelsphere.dev/force-conflicts` equal to the current generation sets Helm `ForceConflicts` for that apply and records `forceConflicts` on the history entry. Any other value is ignored.
 
 On Helm error: `phase: Failed`, `Applied=False` reason `ApplyFailed`, `message` is the error, `observedGeneration` is the generation, and the error is returned for backoff.
 
 On success the controller writes a ControllerRevision named `<llmservice>-<8 hex chars of the hash>` in the same namespace. It is owned by the LLMService, labelled `serving.modelsphere.dev/llmservice=<name>`, and its data is JSON `{spec, annotations}` where annotations are only `swiss.modelsphere.dev/*`. Applying that spec again reuses the name and updates the revision's data and helm revision. `status.history` is prepended and capped (default 10, flag `--llmservice-history-limit`). ControllerRevisions are deleted only when no remaining history entry names them. Each history entry copies those swiss annotations, `forceConflicts`, and `swiss.modelsphere.dev/action` when set.
 
-Events are emitted for Installed, Upgraded, Adopted, Drift, ApplyFailed, and Uninstalled.
+Events are emitted for Installed, Upgraded, Adopted, Drift, ApplyFailed, Uninstalled, and RecoveredPendingRelease.
 
 Charts are cached under `--llmservice-chart-cache-dir` (default `$TMPDIR/llm-operator-charts`), keyed by repository, name, and version.
 
