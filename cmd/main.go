@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -88,6 +89,7 @@ func main() {
 	var llmserviceHistoryLimit int
 	var llmserviceChartCacheDir string
 	var llmservicePendingTimeout time.Duration
+	var llmserviceAllowedChartRepos string
 	flag.IntVar(&llmserviceHistoryLimit, "llmservice-history-limit", servingv1alpha1.DefaultHistoryLimit,
 		"Maximum status.history entries kept for each LLMService.")
 	flag.StringVar(&llmserviceChartCacheDir, "llmservice-chart-cache-dir",
@@ -95,6 +97,10 @@ func main() {
 		"Directory for Helm charts cached by the LLMService controller.")
 	flag.DurationVar(&llmservicePendingTimeout, "llmservice-pending-timeout", servingcontroller.DefaultPendingTimeout,
 		"How long an owned pending Helm release is left in progress before LLMService recovers it.")
+	flag.StringVar(&llmserviceAllowedChartRepos, "llmservice-allowed-chart-repos", "",
+		"Comma-separated chart repositories an LLMService may install from; each allows itself and the paths "+
+			"under it. Empty allows any, which lets whoever can create an LLMService run any chart with this "+
+			"operator's permissions.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -201,13 +207,18 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "llmscaler")
 		os.Exit(1)
 	}
+	allowedChartRepos := splitList(llmserviceAllowedChartRepos)
+	if len(allowedChartRepos) == 0 {
+		setupLog.Info("LLMService installs charts from any repository; set --llmservice-allowed-chart-repos to restrict it")
+	}
 	if err := (&servingcontroller.LLMServiceReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Helm:           helm.New(mgr.GetConfig(), llmserviceChartCacheDir),
-		Recorder:       mgr.GetEventRecorder("llmservice"),
-		HistoryLimit:   llmserviceHistoryLimit,
-		PendingTimeout: llmservicePendingTimeout,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Helm:              helm.New(mgr.GetConfig(), llmserviceChartCacheDir),
+		Recorder:          mgr.GetEventRecorder("llmservice"),
+		HistoryLimit:      llmserviceHistoryLimit,
+		PendingTimeout:    llmservicePendingTimeout,
+		AllowedChartRepos: allowedChartRepos,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "serving-llmservice")
 		os.Exit(1)
@@ -228,4 +239,15 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// splitList reads a comma-separated flag, dropping blanks.
+func splitList(s string) []string {
+	var out []string
+	for v := range strings.SplitSeq(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

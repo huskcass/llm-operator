@@ -44,6 +44,9 @@ const (
 	ReasonApplyFailed = "ApplyFailed"
 	// ReasonChartResolveFailed means spec.chart.version could not be resolved.
 	ReasonChartResolveFailed = "ChartResolveFailed"
+	// ReasonChartRepoNotAllowed means spec.chart.repo is not one the operator
+	// was started to install from. Nothing was fetched or applied.
+	ReasonChartRepoNotAllowed = "ChartRepoNotAllowed"
 	// ReasonPendingRelease means a pending helm release belongs to another
 	// client. The controller does not write to it.
 	ReasonPendingRelease = "PendingRelease"
@@ -57,7 +60,8 @@ const (
 	ReasonSuspended = "Suspended"
 
 	// Finalizer keeps the LLMService until the helm release is uninstalled,
-	// unless AnnotationDeletionPolicy is DeletionPolicyOrphan.
+	// unless AnnotationDeletionPolicy is DeletionPolicyOrphan. Only a release
+	// the LLMService installed or adopted is uninstalled; any other is kept.
 	Finalizer = "serving.modelsphere.dev/finalizer"
 
 	// AnnotationDeletionPolicy requests how deletion treats the helm release.

@@ -17,6 +17,7 @@ import (
 	"helm.sh/helm/v4/pkg/release"
 	releasev1 "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/rest"
 )
 
@@ -83,6 +84,9 @@ type Client struct {
 	cacheDir   string
 	load       ChartLoader
 	newConfig  func(namespace string) (*action.Configuration, error)
+	// mapper tells namespaced kinds from cluster-scoped ones for the
+	// namespace guard. Nil reads the cluster's discovery, once per apply.
+	mapper meta.RESTMapper
 }
 
 // New builds a client that stores releases as Secrets and caches charts under cacheDir.
@@ -159,7 +163,12 @@ func (c *Client) Install(ctx context.Context, ns, releaseName string, ch ChartRe
 	if err != nil {
 		return nil, err
 	}
+	guard, err := c.guard(cfg, ns)
+	if err != nil {
+		return nil, err
+	}
 	inst := action.NewInstall(cfg)
+	inst.PostRenderer = guard
 	inst.ReleaseName = releaseName
 	inst.Namespace = ns
 	inst.ServerSideApply = true
@@ -184,7 +193,12 @@ func (c *Client) Upgrade(ctx context.Context, ns, releaseName string, ch ChartRe
 	if err != nil {
 		return nil, err
 	}
+	guard, err := c.guard(cfg, ns)
+	if err != nil {
+		return nil, err
+	}
 	up := action.NewUpgrade(cfg)
+	up.PostRenderer = guard
 	up.Namespace = ns
 	up.ServerSideApply = "true"
 	up.ForceConflicts = opts.ForceConflicts
@@ -196,6 +210,21 @@ func (c *Client) Upgrade(ctx context.Context, ns, releaseName string, ch ChartRe
 		return nil, err
 	}
 	return toRelease(rel)
+}
+
+// guard is the namespace guard for one apply into ns.
+func (c *Client) guard(cfg *action.Configuration, ns string) (namespaceGuard, error) {
+	if c.mapper != nil {
+		return namespaceGuard{namespace: ns, mapper: c.mapper}, nil
+	}
+	if cfg.RESTClientGetter == nil {
+		return namespaceGuard{}, fmt.Errorf("no REST mapper to check the scope of rendered objects")
+	}
+	mapper, err := cfg.RESTClientGetter.ToRESTMapper()
+	if err != nil {
+		return namespaceGuard{}, fmt.Errorf("REST mapper: %w", err)
+	}
+	return namespaceGuard{namespace: ns, mapper: mapper}, nil
 }
 
 func (c *Client) Uninstall(ctx context.Context, ns, releaseName string) error {

@@ -79,6 +79,9 @@ type LLMServiceReconciler struct {
 	// before recovery. Zero uses DefaultPendingTimeout.
 	PendingTimeout time.Duration
 	ListVersions   VersionLister
+	// AllowedChartRepos are the chart repositories an LLMService may install
+	// from; each allows itself and the paths under it. Empty allows any.
+	AllowedChartRepos []string
 }
 
 // +kubebuilder:rbac:groups=serving.modelsphere.dev,resources=llmservices,verbs=get;list;watch;create;update;patch;delete
@@ -122,10 +125,20 @@ func (r *LLMServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 func (r *LLMServiceReconciler) reconcileDelete(ctx context.Context, obj *servingv1alpha1.LLMService) (ctrl.Result, error) {
 	if obj.Annotations[servingv1alpha1.AnnotationDeletionPolicy] != servingv1alpha1.DeletionPolicyOrphan {
-		if err := r.Helm.Uninstall(ctx, obj.Namespace, obj.Name); err != nil {
+		rel, err := r.Helm.Get(ctx, obj.Namespace, obj.Name)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
-		r.event(obj, corev1.EventTypeNormal, "Uninstalled", "Uninstalled helm release")
+		switch {
+		case rel == nil:
+		case installedOrAdopted(obj, rel):
+			if err := r.Helm.Uninstall(ctx, obj.Namespace, obj.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+			r.event(obj, corev1.EventTypeNormal, "Uninstalled", "Uninstalled helm release")
+		default:
+			r.event(obj, corev1.EventTypeNormal, "KeptRelease", "Kept helm release: this LLMService never installed or adopted it")
+		}
 	}
 	if !controllerutil.ContainsFinalizer(obj, servingv1alpha1.Finalizer) {
 		return ctrl.Result{}, nil
@@ -146,6 +159,12 @@ func (r *LLMServiceReconciler) ensureFinalizer(ctx context.Context, obj *serving
 }
 
 func (r *LLMServiceReconciler) reconcileApply(ctx context.Context, obj *servingv1alpha1.LLMService) (ctrl.Result, error) {
+	// Before anything is fetched or applied: whoever can create an LLMService
+	// runs the chart with the operator's permissions.
+	if !chartRepoAllowed(r.AllowedChartRepos, obj.Spec.Chart.Repo) {
+		err := fmt.Errorf("chart repository %s is not one this operator installs from (allowed: %s)", obj.Spec.Chart.Repo, strings.Join(r.AllowedChartRepos, ", "))
+		return r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonChartRepoNotAllowed, err, false)
+	}
 	creds, err := r.credentials(ctx, obj)
 	if err != nil {
 		return r.fail(ctx, obj, servingv1alpha1.ConditionApplied, servingv1alpha1.ReasonChartResolveFailed, err, true)
@@ -433,7 +452,7 @@ func (r *LLMServiceReconciler) recordSuccess(ctx context.Context, obj *servingv1
 	if err != nil {
 		return err
 	}
-	crName := controllerRevisionName(obj.Name, hash)
+	crName := controllerRevisionName(obj.Name, hash, rel.Revision)
 	if err := r.writeRevision(ctx, obj, crName, snap, rel.Revision); err != nil {
 		return err
 	}
@@ -471,18 +490,39 @@ func (r *LLMServiceReconciler) recordSuccess(ctx context.Context, obj *servingv1
 	return r.gcRevisions(ctx, obj)
 }
 
+// writeRevision records one apply's snapshot. A ControllerRevision's data is
+// immutable, so each apply gets its own, named by helm revision, and none is
+// ever updated. The name comes round again only when the same apply is
+// recorded twice -- an adoption retried after its status update failed -- or
+// when an uninstall restarted helm's numbering; the second finds a snapshot
+// of this object's for a release that is gone, and replaces it.
 func (r *LLMServiceReconciler) writeRevision(ctx context.Context, obj *servingv1alpha1.LLMService, name string, data []byte, rev int) error {
-	cr := &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: obj.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
-		if cr.Labels == nil {
-			cr.Labels = map[string]string{}
-		}
-		cr.Labels[llmserviceLabel] = obj.Name
-		cr.Data = runtime.RawExtension{Raw: append([]byte(nil), data...)}
-		cr.Revision = int64(rev)
-		return controllerutil.SetControllerReference(obj, cr, r.Scheme)
-	})
-	return err
+	cr := &appsv1.ControllerRevision{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: obj.Namespace, Labels: map[string]string{llmserviceLabel: obj.Name}},
+		Data:       runtime.RawExtension{Raw: append([]byte(nil), data...)},
+		Revision:   int64(rev),
+	}
+	if err := controllerutil.SetControllerReference(obj, cr, r.Scheme); err != nil {
+		return err
+	}
+	err := r.Create(ctx, cr)
+	if !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	var have appsv1.ControllerRevision
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cr), &have); err != nil {
+		return err
+	}
+	if same, err := jsonEqual(json.RawMessage(have.Data.Raw), json.RawMessage(data)); err != nil || same {
+		return err
+	}
+	if !metav1.IsControlledBy(&have, obj) {
+		return fmt.Errorf("ControllerRevision %s exists and is not this LLMService's", name)
+	}
+	if err := r.Delete(ctx, &have); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return r.Create(ctx, cr)
 }
 
 func (r *LLMServiceReconciler) gcRevisions(ctx context.Context, obj *servingv1alpha1.LLMService) error {
@@ -644,6 +684,35 @@ func ownedBy(obj *servingv1alpha1.LLMService, rel *helm.Release) bool {
 	return obj.Status.ReleaseUID != "" && obj.Status.ReleaseUID == uid
 }
 
+// chartRepoAllowed reports whether repo is an allowed entry or a path under
+// one: oci://ghcr.io/modelsphere allows oci://ghcr.io/modelsphere/charts, not
+// oci://ghcr.io/modelsphere-x. Trailing slashes do not count. Empty allows any.
+func chartRepoAllowed(allowed []string, repo string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	repo = strings.TrimRight(repo, "/")
+	for _, a := range allowed {
+		a = strings.TrimRight(a, "/")
+		if a != "" && (repo == a || strings.HasPrefix(repo, a+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// installedOrAdopted reports whether deleting obj may uninstall rel. Install
+// and Upgrade stamp obj's UID on the release; adoption does not relabel it and
+// is recorded in status.history instead. status.releaseUID is not enough on
+// its own: it is claimed before a first install that may never have stored a
+// release, and the one found there since may be anybody's.
+func installedOrAdopted(obj *servingv1alpha1.LLMService, rel *helm.Release) bool {
+	if uid, ok := rel.Labels[llmserviceUIDLabel]; ok {
+		return uid != "" && uid == string(obj.UID)
+	}
+	return len(obj.Status.History) > 0
+}
+
 func releaseLabels(obj *servingv1alpha1.LLMService) map[string]string {
 	return map[string]string{
 		llmserviceLabel:    obj.Name,
@@ -674,12 +743,14 @@ func swissAnnotations(in map[string]string) map[string]string {
 	return out
 }
 
-func controllerRevisionName(svc, hash string) string {
+// controllerRevisionName is <svc>-<hash>-<helm revision>: one per apply, so a
+// rollback to earlier values records a snapshot of its own.
+func controllerRevisionName(svc, hash string, rev int) string {
 	short := strings.TrimPrefix(hash, "sha256:")
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	suffix := "-" + short
+	suffix := fmt.Sprintf("-%s-%d", short, rev)
 	base := svc
 	const maxLen = 253
 	if len(base)+len(suffix) > maxLen {

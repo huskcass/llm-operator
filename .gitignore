@@ -16,6 +16,7 @@ Dockerfile.cross
 # Go workspace file
 go.work
 
+vendor
 # Kubernetes Generated files - skip generated files, except for vendored files
 !vendor/**/zz_generated.*
 
@@ -28,3 +29,28 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+# Created by https://www.toptal.com/developers/gitignore/api/tags
+# Edit at https://www.toptal.com/developers/gitignore?templates=tags
+
+### Tags ###
+# Ignore tags created by etags, ctags, gtags (GNU global) and cscope
+TAGS
+.TAGS
+!TAGS/
+tags
+.tags
+!tags/
+gtags.files
+GTAGS
+GRTAGS
+GPATH
+GSYMS
+cscope.files
+cscope.out
+cscope.in.out
+cscope.po.out
+
+
+# End of https://www.toptal.com/developers/gitignore/api/tags
+
+.DS_Store

@@ -17,6 +17,8 @@ import (
 	releasev1 "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage"
 	"helm.sh/helm/v4/pkg/storage/driver"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 	testReleaseUID = "uid-1"
 	uidLabelKey    = "serving.modelsphere.dev/llmservice-uid"
 	nameLabelKey   = "serving.modelsphere.dev/llmservice"
+	testRepo       = "oci://example.com/charts"
 )
 
 func testClient(t *testing.T, chartDir string) (*Client, *action.Configuration) {
@@ -39,6 +42,7 @@ func testClient(t *testing.T, chartDir string) (*Client, *action.Configuration) 
 	cfg.Capabilities = chartcommon.DefaultCapabilities
 	return &Client{
 		cacheDir: t.TempDir(),
+		mapper:   testMapper(),
 		load: func(context.Context, ChartRef, *Credentials) (*chartv2.Chart, error) {
 			return loader.Load(chartDir)
 		},
@@ -47,6 +51,16 @@ func testClient(t *testing.T, chartDir string) (*Client, *action.Configuration) 
 			return cfg, nil
 		},
 	}, cfg
+}
+
+// testMapper knows the kinds the tests render, as a cluster's discovery would.
+func testMapper() meta.RESTMapper {
+	m := meta.NewDefaultRESTMapper(nil)
+	m.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
+	m.Add(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, meta.RESTScopeRoot)
+	m.Add(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"}, meta.RESTScopeNamespace)
+	m.Add(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, meta.RESTScopeRoot)
+	return m
 }
 
 func writeTinyChart(t *testing.T) string {
@@ -71,7 +85,7 @@ func TestGetInstallUpgradeUninstall(t *testing.T) {
 	c, _ := testClient(t, writeTinyChart(t))
 	ctx := t.Context()
 	const ns, name = testNamespace, tinyChartName
-	ref := ChartRef{Repo: "oci://example.com/charts", Name: name, Version: tinyVersion}
+	ref := ChartRef{Repo: testRepo, Name: name, Version: tinyVersion}
 	labels := testLabels(name)
 	before := time.Now().Add(-time.Second)
 

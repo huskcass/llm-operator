@@ -33,8 +33,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	servingv1alpha1 "github.com/modelsphere/llm-operator/api/serving/v1alpha1"
@@ -461,7 +463,7 @@ var _ = Describe("LLMService controller", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
-	It("uninstalls when the release is already absent", func() {
+	It("drops the finalizer when the release is already absent", func() {
 		ns := takeNS()
 		h := &fakeHelm{}
 		l := &versionList{versions: []string{ver086}}
@@ -471,12 +473,110 @@ var _ = Describe("LLMService controller", func() {
 		Expect(k8sClient.Delete(ctx, obj)).To(Succeed())
 		_, err := doReconcile(newReconciler(h, l, 10), ns, "gone")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(h.gets).To(Equal(0))
+		Expect(h.gets).To(Equal(1))
 		Expect(h.installs).To(Equal(0))
 		Expect(h.upgrades).To(Equal(0))
-		Expect(h.uninstalls).To(Equal(1))
+		Expect(h.uninstalls).To(Equal(0))
 		err = k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "gone"}, &servingv1alpha1.LLMService{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("keeps a release it never installed or adopted on delete", func() {
+		ns := takeNS()
+		h := &fakeHelm{}
+		l := &versionList{versions: []string{ver086}}
+		r := newReconciler(h, l, 10)
+
+		// A foreign release with other values: adoption is refused as drift.
+		foreign := &helm.Release{
+			Revision: 3, Status: deployed, ChartName: chartName, ChartVersion: ver086,
+			Config: map[string]any{replicasKey: float64(9)},
+		}
+		h.put(ns, "qwen", foreign)
+		Expect(k8sClient.Create(ctx, newService(ns, "qwen", ver086))).To(Succeed())
+		_, err := doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition(fetch(ns, "qwen"), servingv1alpha1.ConditionAdopted).Reason).To(Equal(servingv1alpha1.ReasonDrift))
+
+		Expect(k8sClient.Delete(ctx, fetch(ns, "qwen"))).To(Succeed())
+		_, err = doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.uninstalls).To(Equal(0))
+		Expect(h.releases).To(HaveKey(h.slot(ns, "qwen")))
+		err = k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "qwen"}, &servingv1alpha1.LLMService{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+		// status.releaseUID claimed before a first install that never stored a
+		// release, and a release since installed by hand: not this object's.
+		obj := newService(ns, "claimed", ver086)
+		obj.Finalizers = []string{servingv1alpha1.Finalizer}
+		Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+		obj = fetch(ns, "claimed")
+		obj.Status.ReleaseUID = string(obj.UID)
+		Expect(k8sClient.Status().Update(ctx, obj)).To(Succeed())
+		h.put(ns, "claimed", &helm.Release{Revision: 1, Status: deployed, ChartName: chartName, ChartVersion: ver086})
+		Expect(k8sClient.Delete(ctx, obj)).To(Succeed())
+		_, err = doReconcile(r, ns, "claimed")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.uninstalls).To(Equal(0))
+		Expect(h.releases).To(HaveKey(h.slot(ns, "claimed")))
+
+		// A release labelled for another LLMService of the same name.
+		obj = newService(ns, "other", ver086)
+		obj.Finalizers = []string{servingv1alpha1.Finalizer}
+		Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+		h.put(ns, "other", &helm.Release{
+			Revision: 2, Status: deployed, ChartName: chartName, ChartVersion: ver086,
+			Labels: map[string]string{llmserviceLabel: "other", llmserviceUIDLabel: "some-other-uid"},
+		})
+		Expect(k8sClient.Delete(ctx, fetch(ns, "other"))).To(Succeed())
+		_, err = doReconcile(r, ns, "other")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.uninstalls).To(Equal(0))
+	})
+
+	It("uninstalls an adopted release on delete", func() {
+		ns := takeNS()
+		h := &fakeHelm{}
+		l := &versionList{versions: []string{ver086}}
+		r := newReconciler(h, l, 10)
+		h.put(ns, "qwen", &helm.Release{
+			Revision: 7, Status: deployed, ChartName: chartName, ChartVersion: ver086,
+			Config: map[string]any{replicasKey: float64(1)},
+		})
+		Expect(k8sClient.Create(ctx, newService(ns, "qwen", ver086))).To(Succeed())
+		_, err := doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition(fetch(ns, "qwen"), servingv1alpha1.ConditionAdopted).Status).To(Equal(metav1.ConditionTrue))
+		Expect(h.releases[h.slot(ns, "qwen")].Labels).NotTo(HaveKey(llmserviceUIDLabel))
+
+		Expect(k8sClient.Delete(ctx, fetch(ns, "qwen"))).To(Succeed())
+		_, err = doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.uninstalls).To(Equal(1))
+	})
+
+	It("refuses a chart repository it was not started to install from", func() {
+		ns := takeNS()
+		h := &fakeHelm{}
+		l := &versionList{versions: []string{ver086}}
+		r := newReconciler(h, l, 10)
+		r.AllowedChartRepos = []string{"oci://ghcr.io/other"}
+		Expect(k8sClient.Create(ctx, newService(ns, "qwen", ver086))).To(Succeed())
+		_, err := doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.gets + h.installs + h.upgrades).To(Equal(0))
+		Expect(l.calls).To(Equal(0))
+		got := fetch(ns, "qwen")
+		Expect(got.Status.Phase).To(Equal(servingv1alpha1.PhaseFailed))
+		Expect(condition(got, servingv1alpha1.ConditionApplied).Reason).To(Equal(servingv1alpha1.ReasonChartRepoNotAllowed))
+		Expect(got.Status.Message).To(ContainSubstring("oci://ghcr.io/modelsphere/charts"))
+
+		r.AllowedChartRepos = []string{modelsphereOCI}
+		_, err = doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.installs).To(Equal(1))
+		Expect(fetch(ns, "qwen").Status.Phase).To(Equal(servingv1alpha1.PhaseApplied))
 	})
 
 	It("leaves status unchanged while suspended", func() {
@@ -733,7 +833,7 @@ var _ = Describe("LLMService controller", func() {
 		Expect(doneObj.Status.ObservedGeneration).To(Equal(doneObj.Generation))
 	})
 
-	It("reuses a ControllerRevision when the same spec is applied again", func() {
+	It("records a rollback to earlier values as a ControllerRevision of its own", func() {
 		ns := takeNS()
 		h := &fakeHelm{}
 		l := &versionList{versions: []string{ver086}}
@@ -748,33 +848,78 @@ var _ = Describe("LLMService controller", func() {
 		_, err = doReconcile(r, ns, "qwen")
 		Expect(err).NotTo(HaveOccurred())
 
+		// What swiss sends for a rollback: the earlier values, with its own
+		// annotations, which the snapshot records -- the data a reused
+		// ControllerRevision name would have had to change.
 		got = fetch(ns, "qwen")
 		got.Spec.Layers = []servingv1alpha1.Layer{layer(`{"replicaCount":1}`)}
+		got.Annotations["swiss.modelsphere.dev/action"] = "rollback"
+		got.Annotations["swiss.modelsphere.dev/plan-hash"] = "p3"
 		Expect(k8sClient.Update(ctx, got)).To(Succeed())
 		_, err = doReconcile(r, ns, "qwen")
 		Expect(err).NotTo(HaveOccurred())
 
 		got = fetch(ns, "qwen")
 		Expect(got.Status.History).To(HaveLen(3))
+		Expect(got.Status.AppliedHash).To(Equal(got.Status.History[0].Hash))
 		Expect(got.Status.History[0].Hash).To(Equal(got.Status.History[2].Hash))
-		Expect(got.Status.History[0].Hash).NotTo(Equal(got.Status.History[1].Hash))
-		Expect(got.Status.History[0].ControllerRevision).To(Equal(got.Status.History[2].ControllerRevision))
-		Expect(got.Status.History[0].ControllerRevision).NotTo(Equal(got.Status.History[1].ControllerRevision))
+		Expect(got.Status.History[0].Action).To(Equal("rollback"))
+		names := map[string]bool{}
+		for _, e := range got.Status.History {
+			names[e.ControllerRevision] = true
+		}
+		Expect(names).To(HaveLen(3))
 		Expect(got.Status.History[0].Revision).To(Equal(3))
-		Expect(got.Status.History[1].Revision).To(Equal(2))
-		Expect(got.Status.History[2].Revision).To(Equal(1))
 
-		var crA, crB appsv1.ControllerRevision
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: got.Status.History[0].ControllerRevision}, &crA)).To(Succeed())
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: got.Status.History[1].ControllerRevision}, &crB)).To(Succeed())
-		Expect(crA.Revision).To(Equal(int64(got.Status.History[0].Revision)))
-		Expect(crB.Revision).To(Equal(int64(2)))
+		snapshot := func(name string) revisionSnapshot {
+			var cr appsv1.ControllerRevision
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &cr)).To(Succeed())
+			var snap revisionSnapshot
+			Expect(json.Unmarshal(cr.Data.Raw, &snap)).To(Succeed())
+			return snap
+		}
+		Expect(snapshot(got.Status.History[0].ControllerRevision).Annotations).To(HaveKeyWithValue("swiss.modelsphere.dev/action", "rollback"))
+		Expect(snapshot(got.Status.History[2].ControllerRevision).Annotations).To(HaveKeyWithValue("swiss.modelsphere.dev/action", "install"))
+
+		// Applied: the next reconcile has nothing to do.
+		upgrades := h.upgrades
+		_, err = doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(h.upgrades).To(Equal(upgrades))
+	})
+
+	It("replaces its own stale snapshot under a reused revision name", func() {
+		ns := takeNS()
+		h := &fakeHelm{}
+		l := &versionList{versions: []string{ver086}}
+		r := newReconciler(h, l, 10)
+		Expect(k8sClient.Create(ctx, newService(ns, "qwen", ver086))).To(Succeed())
+		obj := fetch(ns, "qwen")
+
+		// What an uninstall leaves when helm's numbering restarts: a snapshot
+		// of this object's, under the name the next install will use.
+		values, err := mergeLayers(obj.Spec.Layers)
+		Expect(err).NotTo(HaveOccurred())
+		hash, err := appliedHash(chartName, ver086, values)
+		Expect(err).NotTo(HaveOccurred())
+		stale := &appsv1.ControllerRevision{
+			ObjectMeta: metav1.ObjectMeta{Name: controllerRevisionName("qwen", hash, 1), Namespace: ns},
+			Data:       runtime.RawExtension{Raw: []byte(`{"annotations":{"swiss.modelsphere.dev/action":"old"}}`)},
+			Revision:   1,
+		}
+		Expect(controllerutil.SetControllerReference(obj, stale, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, stale)).To(Succeed())
+
+		_, err = doReconcile(r, ns, "qwen")
+		Expect(err).NotTo(HaveOccurred())
+		got := fetch(ns, "qwen")
+		Expect(got.Status.Phase).To(Equal(servingv1alpha1.PhaseApplied))
+		Expect(got.Status.History[0].ControllerRevision).To(Equal(stale.Name))
+		var cr appsv1.ControllerRevision
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: stale.Name}, &cr)).To(Succeed())
 		var snap revisionSnapshot
-		Expect(json.Unmarshal(crA.Data.Raw, &snap)).To(Succeed())
-		Expect(snap.Spec.Layers).To(HaveLen(1))
-		var values map[string]any
-		Expect(json.Unmarshal(snap.Spec.Layers[0].Values.Raw, &values)).To(Succeed())
-		Expect(values[replicasKey]).To(Equal(float64(1)))
+		Expect(json.Unmarshal(cr.Data.Raw, &snap)).To(Succeed())
+		Expect(snap.Annotations).To(HaveKeyWithValue("swiss.modelsphere.dev/action", "install"))
 	})
 
 	It("fails when the chart version cannot be resolved", func() {
