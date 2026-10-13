@@ -63,6 +63,9 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          # Chart repositories an LLMService may install from. Unset, whoever can
+          # create an LLMService can run any chart with this operator's permissions.
+          # - --llmservice-allowed-chart-repos=https://modelsphere.github.io/helm-charts,oci://ghcr.io/modelsphere/charts
         # 'controller' is the placeholder. The real image comes from the `images:` transformer in
         # ./kustomization.yaml, which matches on this name — `make build-installer` and `make deploy` set it from ${IMG}.
         # Hardcoding a real image here breaks that match and silently pins whatever is written previously.
@@ -96,11 +99,17 @@ spec:
         resources:
           limits:
             cpu: 500m
-            memory: 128Mi
+            memory: 512Mi
           requests:
             cpu: 10m
-            memory: 64Mi
-        volumeMounts: []
-      volumes: []
+            memory: 128Mi
+        volumeMounts:
+        # The root filesystem is read-only; the LLMService chart cache
+        # (--llmservice-chart-cache-dir) lives under /tmp by default.
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

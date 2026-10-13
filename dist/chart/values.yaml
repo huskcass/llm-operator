@@ -29,6 +29,10 @@ manager:
   ##
   args:
     - --leader-elect
+    ## Chart repositories an LLMService may install from; each allows itself and
+    ## the paths under it. Unset, whoever can create an LLMService can run any
+    ## chart with this operator's cluster-wide permissions.
+    # - --llmservice-allowed-chart-repos=https://modelsphere.github.io/helm-charts,oci://ghcr.io/modelsphere/charts
 
   ## Image pull secrets
   ##
@@ -56,10 +60,10 @@ manager:
   resources:
     limits:
       cpu: 500m
-      memory: 128Mi
+      memory: 512Mi
     requests:
       cpu: 10m
-      memory: 64Mi
+      memory: 128Mi
 
   ## Manager pod's affinity
   ##

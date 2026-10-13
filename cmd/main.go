@@ -20,6 +20,9 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -35,8 +38,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/v1alpha1"
-	"github.com/modelsphere/llm-operator/internal/controller"
+	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/autoscaling/v1alpha1"
+	servingv1alpha1 "github.com/modelsphere/llm-operator/api/serving/v1alpha1"
+	controller "github.com/modelsphere/llm-operator/internal/controller/autoscaling"
+	servingcontroller "github.com/modelsphere/llm-operator/internal/controller/serving"
+	"github.com/modelsphere/llm-operator/internal/helm"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,6 +55,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(autoscalingv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(servingv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -79,6 +86,21 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var llmserviceHistoryLimit int
+	var llmserviceChartCacheDir string
+	var llmservicePendingTimeout time.Duration
+	var llmserviceAllowedChartRepos string
+	flag.IntVar(&llmserviceHistoryLimit, "llmservice-history-limit", servingv1alpha1.DefaultHistoryLimit,
+		"Maximum status.history entries kept for each LLMService.")
+	flag.StringVar(&llmserviceChartCacheDir, "llmservice-chart-cache-dir",
+		filepath.Join(os.TempDir(), "llm-operator-charts"),
+		"Directory for Helm charts cached by the LLMService controller.")
+	flag.DurationVar(&llmservicePendingTimeout, "llmservice-pending-timeout", servingcontroller.DefaultPendingTimeout,
+		"How long an owned pending Helm release is left in progress before LLMService recovers it.")
+	flag.StringVar(&llmserviceAllowedChartRepos, "llmservice-allowed-chart-repos", "",
+		"Comma-separated chart repositories an LLMService may install from; each allows itself and the paths "+
+			"under it. Empty allows any, which lets whoever can create an LLMService run any chart with this "+
+			"operator's permissions.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -185,6 +207,22 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "llmscaler")
 		os.Exit(1)
 	}
+	allowedChartRepos := splitList(llmserviceAllowedChartRepos)
+	if len(allowedChartRepos) == 0 {
+		setupLog.Info("LLMService installs charts from any repository; set --llmservice-allowed-chart-repos to restrict it")
+	}
+	if err := (&servingcontroller.LLMServiceReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Helm:              helm.New(mgr.GetConfig(), llmserviceChartCacheDir),
+		Recorder:          mgr.GetEventRecorder("llmservice"),
+		HistoryLimit:      llmserviceHistoryLimit,
+		PendingTimeout:    llmservicePendingTimeout,
+		AllowedChartRepos: allowedChartRepos,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "serving-llmservice")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -201,4 +239,15 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// splitList reads a comma-separated flag, dropping blanks.
+func splitList(s string) []string {
+	var out []string
+	for v := range strings.SplitSeq(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
