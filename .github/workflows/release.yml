@@ -2,6 +2,8 @@
 #
 #   push to main      <appVersion>-git<sha7>
 #   tag v<X>          <X>, which must be dist/chart/Chart.yaml's appVersion; the image is also latest
+#   tag v<X>-<pre>    <X>-<pre> (v0.5.0-rc1), a candidate for <X>: Chart.yaml stays at
+#                     <X> for every candidate, and the image never takes latest
 #   pull request      build, lint and package; nothing pushed
 #   workflow_dispatch build, lint and package; nothing pushed
 #
@@ -123,6 +125,8 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           set -eu
+          # Empty the pinned image tag so it falls back to --app-version.
+          sed -i -E 's/^(    tag: ).*/\1""/' dist/chart/values.yaml
           helm lint --strict dist/chart
           helm package dist/chart --version "$VERSION" --app-version "$VERSION" --destination dist
 
