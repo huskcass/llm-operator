@@ -16,23 +16,23 @@ manager:
   replicas: 1
 
   image:
-    ## Public image on Docker Hub. Override it to run your own build.
     repository: 4pdosc/llm-operator
-    ## Image tag. Left empty on purpose so it follows Chart.appVersion --
-    ## a pinned tag here silently outranks appVersion and ships an older image
-    ## than the chart claims to install.
+    ## Image tag (defaults to Chart.appVersion if not set)
     ##
-    tag: ""
+    tag: "0.4.0"
     pullPolicy: IfNotPresent
 
   ## Arguments
   ##
   args:
     - --leader-elect
-    ## Chart repositories an LLMService may install from; each allows itself and
-    ## the paths under it. Unset, whoever can create an LLMService can run any
-    ## chart with this operator's cluster-wide permissions.
-    # - --llmservice-allowed-chart-repos=https://modelsphere.github.io/helm-charts,oci://ghcr.io/modelsphere/charts
+
+  ## Health probes.
+  ## The manager serves the liveness (/healthz) and readiness (/readyz) endpoints on this port.
+  ##
+  healthProbe:
+    # Health probe server port
+    port: 8081
 
   ## Image pull secrets
   ##
@@ -111,6 +111,16 @@ manager:
   #   labels: {}
   #   annotations: {}
 
+  ## Extra volumes and volume mounts
+  ##
+  extraVolumes:
+    - emptyDir: {}
+      name: tmp
+
+  extraVolumeMounts:
+    - mountPath: /tmp
+      name: tmp
+
 ## RBAC configuration
 ##
 rbac:
@@ -133,7 +143,8 @@ serviceAccount:
   # Install default ServiceAccount provided
   enabled: true
 
-  ## Existing ServiceAccount name (only when enabled=false)
+  ## Existing ServiceAccount name (required when enabled=false)
+  ## Set to "default" to use the namespace default ServiceAccount
   ## Note: When enabled=true, respects nameOverride/fullnameOverride
   ##
   # name: ""
@@ -171,11 +182,26 @@ metrics:
 certManager:
   enabled: false
 
+## Webhook server configuration
+##
+webhook:
+  enabled: false
+  # Webhook server port
+  port: 9443
+
 ## Prometheus ServiceMonitor for metrics scraping.
 ## Requires prometheus-operator to be installed in the cluster.
 ##
 prometheus:
   enabled: false
+
+  ## Custom ServiceMonitor labels
+  ##
+  # labels: {}
+
+  ## Custom ServiceMonitor annotations
+  ##
+  # annotations: {}
 
 ## Network policies for controlling traffic flow.
 ## Enable to restrict ingress to the controller manager.

@@ -83,31 +83,31 @@ spec:
         # Bind to :0 to disable the controller-runtime managed metrics server
         - --metrics-bind-address=0
         {{- end }}
-        - --health-probe-bind-address=:8081
+        - --health-probe-bind-address=:{{ .Values.manager.healthProbe.port }}
         {{- range .Values.manager.args }}
-        - {{ . }}
+        - {{ tpl . $ }}
         {{- end }}
         command:
         - /manager
-        image: "{{ .Values.manager.image.repository }}{{- if not (contains "@" .Values.manager.image.repository) }}:{{ .Values.manager.image.tag | default .Chart.AppVersion }}{{- end }}"
+        image: "{{ .Values.manager.image.repository | default "controller" }}{{- if not (contains "@" (.Values.manager.image.repository | default "controller")) }}:{{ .Values.manager.image.tag | default .Chart.AppVersion }}{{- end }}"
         {{- with .Values.manager.image.pullPolicy }}
         imagePullPolicy: {{ . }}
         {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 8081
+            port: {{ .Values.manager.healthProbe.port }}
           initialDelaySeconds: 15
           periodSeconds: 20
         name: manager
         ports:
-        - containerPort: 8081
+        - containerPort: {{ .Values.manager.healthProbe.port }}
           name: health
           protocol: TCP
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 8081
+            port: {{ .Values.manager.healthProbe.port }}
           initialDelaySeconds: 5
           periodSeconds: 10
         resources:
@@ -123,12 +123,10 @@ spec:
           {}
           {{- end }}
         volumeMounts:
-          # The root filesystem is read-only; the LLMService chart cache
-          # (--llmservice-chart-cache-dir) lives under /tmp by default.
-          - name: tmp
-            mountPath: /tmp
-          {{- with .Values.manager.extraVolumeMounts }}
-          {{- toYaml . | nindent 10 }}
+          {{- if .Values.manager.extraVolumeMounts }}
+          {{- toYaml .Values.manager.extraVolumeMounts | nindent 10 }}
+          {{- else }}
+          []
           {{- end }}
       securityContext:
         {{- if .Values.manager.podSecurityContext }}
@@ -141,9 +139,9 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.manager.terminationGracePeriodSeconds }}
       {{- end }}
       volumes:
-        - name: tmp
-          emptyDir: {}
-        {{- with .Values.manager.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
+        {{- if .Values.manager.extraVolumes }}
+        {{- toYaml .Values.manager.extraVolumes | nindent 8 }}
+        {{- else }}
+        []
         {{- end }}
 {{- end }}

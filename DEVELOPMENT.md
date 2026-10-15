@@ -62,47 +62,76 @@ make undeploy
 
 ## Project Distribution
 
-Following the options to release and provide this solution to the users.
+The operator installs two ways: with kustomize from `config/default`, or with the Helm chart in `dist/chart`, which is generated from `config/`.
 
-### By providing a bundle with all YAML files
+### Source of truth
 
-1. Build the installer for the image built and published in the registry:
+Edit `config/`. Never edit `dist/`.
 
-```sh
-make build-installer IMG=<some-registry>/llmscaleoperator:tag
+- **Hand-maintained:** everything under `config/` except the two generated paths below, e.g. `config/manager/manager.yaml`, `config/default`,
+  `config/samples` and the scaffolded roles in `config/rbac`.
+- **Generated in `config/`:** `config/crd/bases` and `config/rbac/role.yaml`, written by `make manifests` from the Go types and markers.
+- **Generated in `dist/`:** `dist/install.yaml` and `dist/chart`. To change them, change `config/` and regenerate.
+  `dist/install.yaml` is an intermediate artifact: the Helm plugin reads it to build the chart. Never install from it.
+
+```
+api/**/*_types.go + markers ── make manifests ──▶ config/crd/bases, config/rbac/role.yaml
+                                                          │
+config/manager, config/default, config/rbac, ...  ────────┤   hand-maintained
+                                                          ▼
+                              kustomize build config/default ──▶ dist/install.yaml
+                                                                        │
+                                      kubebuilder edit --plugins=helm/v2-alpha --force
+                                                                        ▼
+                                                                   dist/chart
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+### Regenerating
 
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+After changing anything in `config/` or the API types:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/llmscaleoperator/<tag or branch>/dist/install.yaml
+kubebuilder edit --plugins=helm/v2-alpha --force
 ```
 
-### By providing a Helm Chart
+The plugin first runs `make build-installer` (which runs `make manifests` and `make generate`),
+then rebuilds `dist/chart` from the new `dist/install.yaml`. Commit `config/` and `dist/` together.
 
-1. Build the chart using the optional helm plugin
+**NOTE:** Use kubebuilder v4.16.0 or later. v4.15 generates a manager
+template that fails to render when the Deployment has its own volumes, such as
+the `/tmp` mount in `config/manager/manager.yaml`.
+
+**NOTE:** Always pass `--force`. Without it the plugin keeps the existing
+`dist/chart/values.yaml`, so values that come from `config/manager` (volumes,
+args) go stale while the templates are regenerated.
+
+**NOTE:** `dist/chart/Chart.yaml` is the one exception. The plugin creates it
+once and never overwrites it, even with `--force`. Bump its `version` and
+`appVersion` by hand when releasing; the release workflow refuses a tag that
+does not match `appVersion`.
+
+**NOTE:** `make build-installer` and `make deploy` both run
+`kustomize edit set image controller=${IMG}`, which rewrites the `images:`
+entry in `config/manager/kustomization.yaml`. Expect that file in your diff.
+
+### Installing with kustomize
 
 ```sh
-kubebuilder edit --plugins=helm/v2-alpha
+make deploy IMG=<registry>/llm-operator:<tag>
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+`make deploy` builds `config/default` and applies it. See
+[To Deploy on the cluster](#to-deploy-on-the-cluster).
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+### Installing with Helm
+
+Install from the checkout, or with `make helm-deploy IMG=<registry>/llm-operator:<tag>`:
+
+```sh
+helm install llmscaleoperator ./dist/chart --namespace <ns> --create-namespace
+```
+
+The release workflow packages and publishes `dist/chart`.
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 

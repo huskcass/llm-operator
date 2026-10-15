@@ -161,14 +161,6 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm llmscaleoperator-builder
 	rm Dockerfile.cross
 
-.PHONY: chart-sync
-chart-sync: manifests ## Propagate the generated CRD and RBAC into dist/chart.
-	./hack/chart-sync.sh
-
-.PHONY: chart-check
-chart-check: manifests ## Fail if dist/chart has fallen behind config/.
-	./hack/chart-sync.sh --check
-
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
