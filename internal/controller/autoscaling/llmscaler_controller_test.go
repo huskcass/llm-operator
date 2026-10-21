@@ -31,7 +31,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	testingclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/autoscaling/v1alpha1"
@@ -535,6 +538,380 @@ var _ = Describe("LLMScaler Controller", func() {
 			// 3 - 2 = 1, which is minReplicas, so it lands there rather than below.
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		})
+
+		// deferralClock is the time source for the deferral tests. Second-aligned
+		// so status.deferredSince round-trips through the apiserver unchanged
+		// (metav1.Time is stored as RFC3339, which has no fractional seconds).
+		deferralStart := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+		setDeferTimeout := func(seconds int32) {
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Spec.DeferTimeoutSeconds = &seconds
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+		}
+
+		markRollout := func() {
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			// Not all replicas are on the new template yet -> rollout in progress.
+			deploy.Status.UpdatedReplicas = 0
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+		}
+
+		It("should default deferTimeoutSeconds to 600", func() {
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			// The fixture leaves the field unset; the CRD default fills it.
+			Expect(scaler.Spec.DeferTimeoutSeconds).NotTo(BeNil())
+			Expect(*scaler.Spec.DeferTimeoutSeconds).To(Equal(autoscalingv1alpha1.DefaultDeferTimeoutSeconds))
+		})
+
+		It("should force a scale-up once a stuck rollout exceeds the deferral timeout", func() {
+			setDeferTimeout(60)
+			markRollout()
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			rec := events.NewFakeRecorder(8)
+			r := newScalerReconciler(clk, rec)
+
+			By("deferring the first sync and stamping deferredSince")
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
+
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			// The recommendation is recorded even though nothing was written.
+			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(2)))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonRolloutInProgress))
+			Expect(cond.ObservedGeneration).To(Equal(scaler.Generation))
+			Expect(cond.Message).To(ContainSubstring("holding 1 replicas (wanted 2)"))
+			Expect(cond.Message).To(ContainSubstring(msgRolloutInProgress))
+			Expect(cond.Message).To(ContainSubstring(deferralStart.Format(time.RFC3339)))
+			Expect(cond.Message).To(ContainSubstring("will apply after 60s"))
+
+			var ev string
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Normal " + eventReasonScalingDeferred))
+			Expect(ev).To(ContainSubstring("holding 1 replicas (wanted 2)"))
+
+			By("reconciling again before the timeout, without restamping or rewriting")
+			clk.SetTime(deferralStart.Add(59 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
+			Expect(rec.Events).NotTo(Receive())
+
+			By("advancing past the timeout and forcing the held scale-up")
+			clk.SetTime(deferralStart.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(2)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(2)))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(2)))
+			cond = scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
+			Expect(cond.ObservedGeneration).To(Equal(scaler.Generation))
+			Expect(cond.Message).To(ContainSubstring("scaling 1 -> 2 anyway"))
+
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Warning " + eventReasonDeferralTimedOut))
+			Expect(ev).To(ContainSubstring(msgRolloutInProgress))
+			Expect(ev).To(ContainSubstring("1 -> 2"))
+			Expect(rec.Events).NotTo(Receive())
+		})
+
+		It("should force a scale-down of an unready fleet once the deferral times out", func() {
+			// readyReplicas == 0 is omitted from status, so the controller sees the
+			// field as missing. The old ready==0 -> spec fallback would have made
+			// this look settled and scaled immediately; the settle guard now uses
+			// the raw count. The ratio still falls back to spec, which is why an
+			// idle metric recommends minReplicas rather than staying at 5.
+			By("capping the step and parking 5 replicas with none ready")
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			timeout := int32(60)
+			scaler.Spec.DeferTimeoutSeconds = &timeout
+			scaler.Spec.ScaleDown.MaxStepReplicas = 2
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+			// Not unsettledAtFive: that leaves status.availableReplicas at the
+			// fixture's 1, and the apiserver rejects availableReplicas > readyReplicas
+			// when ready is 0. 0 is also omitted, so the controller sees the field
+			// as missing.
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			var five int32 = 5
+			deploy.Spec.Replicas = &five
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = five
+			deploy.Status.UpdatedReplicas = five
+			deploy.Status.ReadyReplicas = 0
+			deploy.Status.AvailableReplicas = 0
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+			mockValue = "0"
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			rec := events.NewFakeRecorder(8)
+			r := newScalerReconciler(clk, rec)
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(5)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			// Uncapped recommendation is minReplicas; the held write is the step.
+			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(1)))
+			Expect(scaler.Status.CurrentReplicas).To(Equal(int32(0)))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(5)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonScaleDownSettling))
+			Expect(cond.Message).To(ContainSubstring("holding 5 replicas (wanted 3)"))
+			Expect(cond.Message).To(ContainSubstring("will apply after 60s"))
+
+			By("keeping the same deferral until the timeout")
+			clk.SetTime(deferralStart.Add(59 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(5)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+
+			By("forcing the capped step, not the uncapped recommendation")
+			clk.SetTime(deferralStart.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(3)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(1)))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(3)))
+			Expect(scaler.Status.CurrentReplicas).To(Equal(int32(0)))
+			cond = scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
+			Expect(cond.Message).To(ContainSubstring("scaling 5 -> 3 anyway"))
+
+			var ev string
+			// The entering deferral event, then the timeout warning.
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Normal " + eventReasonScalingDeferred))
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Warning " + eventReasonDeferralTimedOut))
+			Expect(ev).To(ContainSubstring(msgScaleDownNotSettled))
+			Expect(ev).To(ContainSubstring("5 -> 3"))
+		})
+
+		It("should keep one deferral when the guard reason changes", func() {
+			setDeferTimeout(60)
+			// 5 replicas, 3 ready, but not yet rolled out: the rollout guard wins
+			// over the settle guard. An idle metric wants to scale down.
+			unsettledAtFive(3, nil)
+			markRollout()
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			rec := events.NewFakeRecorder(8)
+			r := newScalerReconciler(clk, rec)
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scalingDeferredCondition(scaler).Reason).To(Equal(autoscalingv1alpha1.ReasonRolloutInProgress))
+			first := scaler.Status.DeferredSince.Time
+
+			By("finishing the rollout while the fleet is still short of ready")
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = 5
+			deploy.Status.UpdatedReplicas = 5
+			deploy.Status.ReadyReplicas = 3
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+
+			clk.SetTime(deferralStart.Add(10 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(5)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", first))
+			Expect(scalingDeferredCondition(scaler).Reason).To(Equal(autoscalingv1alpha1.ReasonScaleDownSettling))
+
+			var ev string
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(ContainSubstring(msgRolloutInProgress))
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(ContainSubstring(msgScaleDownNotSettled))
+
+			By("not emitting again while the same guard still defers")
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", first))
+			Expect(rec.Events).NotTo(Receive())
+		})
+
+		It("should force a deferral that already exceeded the timeout on a fresh reconciler", func() {
+			// deferredSince lives in status, so a process restart (a new reconciler,
+			// with an empty recommendation map) still enforces the deadline.
+			setDeferTimeout(60)
+			markRollout()
+
+			past := metav1.NewTime(deferralStart.Add(-2 * time.Hour))
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Status.DeferredSince = &past
+			Expect(k8sClient.Status().Update(ctx, scaler)).To(Succeed())
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			rec := events.NewFakeRecorder(8)
+			r := newScalerReconciler(clk, rec)
+			Expect(r.recommendations).To(BeNil())
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(2)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(2)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
+
+			var ev string
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Warning " + eventReasonDeferralTimedOut))
+			Expect(ev).To(ContainSubstring("1 -> 2"))
+		})
+
+		It("should never force a deferral when deferTimeoutSeconds is 0", func() {
+			setDeferTimeout(0)
+			markRollout()
+
+			past := metav1.NewTime(deferralStart.Add(-24 * time.Hour))
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Status.DeferredSince = &past
+			Expect(k8sClient.Status().Update(ctx, scaler)).To(Succeed())
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			rec := events.NewFakeRecorder(8)
+			r := newScalerReconciler(clk, rec)
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart.Add(-24*time.Hour)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonRolloutInProgress))
+			Expect(cond.Message).To(ContainSubstring("never forced (deferTimeoutSeconds is 0)"))
+
+			var ev string
+			Expect(rec.Events).To(Receive(&ev))
+			Expect(ev).To(HavePrefix("Normal " + eventReasonScalingDeferred))
+			Expect(rec.Events).NotTo(Receive())
+		})
+
+		It("should clear a deferral when the sync becomes a no-op", func() {
+			setDeferTimeout(60)
+			markRollout()
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			r := newScalerReconciler(clk, events.NewFakeRecorder(4))
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+
+			By("making the recommendation match spec while the rollout is still in progress")
+			// ceil(1 * 0.5/0.5) = 1, which is already spec. The rollout guard would
+			// still match, but there is nothing to hold back, so the deferral ends.
+			mockValue = "0.5"
+			clk.SetTime(deferralStart.Add(10 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
+			Expect(deploy.Status.UpdatedReplicas).To(Equal(int32(0)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonNotDeferred))
+			Expect(cond.Message).To(ContainSubstring("already at the step target"))
+		})
+
+		It("should keep the ready-replica fallback for the scaling ratio only", func() {
+			// readyReplicas is 0, so the ratio falls back to spec (3):
+			// ceil(3 * 0.85/0.5) = 6, clamped to maxReplicas 5. Without that
+			// fallback the single-replica baseline in the metric math would
+			// recommend ceil(1 * 0.85/0.5) = 2. status.currentReplicas stays 0.
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			var three int32 = 3
+			deploy.Spec.Replicas = &three
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = three
+			deploy.Status.UpdatedReplicas = three
+			deploy.Status.ReadyReplicas = 0
+			deploy.Status.AvailableReplicas = 0
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+
+			r := &LLMScalerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			Expect(*deploy.Spec.Replicas).To(Equal(int32(5)))
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.CurrentReplicas).To(Equal(int32(0)))
+			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(5)))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(5)))
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonNotDeferred))
+		})
 	})
 
 	// These run against the envtest apiserver so the CRD's own union rules are
@@ -738,6 +1115,145 @@ var _ = Describe("LLMScaler Controller", func() {
 		})
 	})
 })
+
+func newScalerReconciler(clk *testingclock.FakeClock, rec events.EventRecorder) *LLMScalerReconciler {
+	return &LLMScalerReconciler{
+		Client:   k8sClient,
+		Scheme:   k8sClient.Scheme(),
+		Clock:    clk,
+		Recorder: rec,
+	}
+}
+
+func scalingDeferredCondition(scaler *autoscalingv1alpha1.LLMScaler) *metav1.Condition {
+	cond := meta.FindStatusCondition(scaler.Status.Conditions, autoscalingv1alpha1.ConditionScalingDeferred)
+	Expect(cond).NotTo(BeNil())
+	return cond
+}
+
+// TestDeferTimeout covers the nil spec (CRD default / in-memory object) and an
+// explicit 0, which must stay distinguishable so "never force" is opt-in.
+func TestDeferTimeout(t *testing.T) {
+	if got := deferTimeout(&autoscalingv1alpha1.LLMScaler{}); got != time.Duration(autoscalingv1alpha1.DefaultDeferTimeoutSeconds)*time.Second {
+		t.Fatalf("nil spec: got %s, want %s", got, time.Duration(autoscalingv1alpha1.DefaultDeferTimeoutSeconds)*time.Second)
+	}
+	zero := int32(0)
+	if got := deferTimeout(&autoscalingv1alpha1.LLMScaler{Spec: autoscalingv1alpha1.LLMScalerSpec{DeferTimeoutSeconds: &zero}}); got != 0 {
+		t.Fatalf("explicit 0: got %s, want 0", got)
+	}
+	thirty := int32(30)
+	if got := deferTimeout(&autoscalingv1alpha1.LLMScaler{Spec: autoscalingv1alpha1.LLMScalerSpec{DeferTimeoutSeconds: &thirty}}); got != 30*time.Second {
+		t.Fatalf("explicit 30: got %s, want 30s", got)
+	}
+}
+
+// TestPastDeferTimeout pins the deadline: equal to the timeout forces, short of
+// it does not, and 0 never does.
+func TestPastDeferTimeout(t *testing.T) {
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	since := metav1.NewTime(t0)
+	if pastDeferTimeout(nil, time.Minute, t0.Add(time.Hour)) {
+		t.Fatal("nil deferredSince should not be past the timeout")
+	}
+	if pastDeferTimeout(&since, 0, t0.Add(24*time.Hour)) {
+		t.Fatal("timeout 0 should never be past")
+	}
+	if pastDeferTimeout(&since, time.Minute, t0.Add(59*time.Second)) {
+		t.Fatal("59s of a 60s timeout should not be past")
+	}
+	if !pastDeferTimeout(&since, time.Minute, t0.Add(time.Minute)) {
+		t.Fatal("exactly the timeout should be past")
+	}
+	if !pastDeferTimeout(&since, time.Minute, t0.Add(time.Minute+time.Second)) {
+		t.Fatal("past the timeout should be past")
+	}
+}
+
+// deploymentObject builds a Deployment-shaped object for the guard tests.
+// status.replicas stays at 5; the cases vary generation and updatedReplicas.
+func deploymentObject(gen, observed, updated int64) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"generation": gen},
+		"status": map[string]any{
+			"observedGeneration": observed,
+			"updatedReplicas":    updated,
+			"replicas":           int64(5),
+		},
+	}}
+}
+
+// TestScaleDeferReason checks the guard result the controller turns into a
+// condition. readyReplicas is the raw count: 0 does not count as settled.
+func TestScaleDeferReason(t *testing.T) {
+	rolledOut := deploymentObject(3, 3, 5)
+	tests := []struct {
+		name                    string
+		obj                     *unstructured.Unstructured
+		kind                    string
+		spec, ready             int64
+		target                  int32
+		wantReason, wantMessage string
+	}{
+		{
+			name: "rollout holds a scale-up",
+			obj:  deploymentObject(4, 3, 5),
+			kind: deploymentKind,
+			spec: 5, ready: 5, target: 7,
+			wantReason:  autoscalingv1alpha1.ReasonRolloutInProgress,
+			wantMessage: msgRolloutInProgress,
+		},
+		{
+			name: "rollout wins over an unsettled scale-down",
+			obj:  deploymentObject(4, 3, 5),
+			kind: deploymentKind,
+			spec: 5, ready: 2, target: 3,
+			wantReason:  autoscalingv1alpha1.ReasonRolloutInProgress,
+			wantMessage: msgRolloutInProgress,
+		},
+		{
+			name: "unsettled scale-down",
+			obj:  rolledOut,
+			kind: deploymentKind,
+			spec: 5, ready: 3, target: 4,
+			wantReason:  autoscalingv1alpha1.ReasonScaleDownSettling,
+			wantMessage: msgScaleDownNotSettled,
+		},
+		{
+			name: "ready count of 0 is not settled",
+			obj:  rolledOut,
+			kind: deploymentKind,
+			// A missing status.readyReplicas is passed in as 0. Treating it as
+			// spec would skip the guard.
+			spec: 5, ready: 0, target: 4,
+			wantReason:  autoscalingv1alpha1.ReasonScaleDownSettling,
+			wantMessage: msgScaleDownNotSettled,
+		},
+		{
+			name: "settled scale-down may proceed",
+			obj:  rolledOut,
+			kind: deploymentKind,
+			spec: 5, ready: 5, target: 4,
+		},
+		{
+			name: "scale-up is not gated on settle",
+			obj:  rolledOut,
+			kind: deploymentKind,
+			spec: 5, ready: 2, target: 6,
+		},
+		{
+			name: "non-Deployment ignores the rollout guard",
+			obj:  deploymentObject(4, 1, 0),
+			kind: "StatefulSet",
+			spec: 5, ready: 5, target: 7,
+		},
+	}
+	for _, tt := range tests {
+		got := scaleDeferReason(tt.obj, tt.kind, tt.spec, tt.ready, tt.target)
+		if got.reason != tt.wantReason || got.message != tt.wantMessage {
+			t.Errorf("%s: got {%q %q}, want {%q %q}", tt.name, got.reason, got.message, tt.wantReason, tt.wantMessage)
+		}
+	}
+}
 
 // TestStabilizeDesired unit-tests the scale-down stabilization helper directly
 // (deterministic, no envtest needed).

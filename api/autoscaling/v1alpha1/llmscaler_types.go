@@ -42,6 +42,12 @@ const (
 	MetricProviderCustom = "Custom"
 )
 
+// DefaultDeferTimeoutSeconds is how long a scale action may be held back when
+// spec.deferTimeoutSeconds is unset. It matches the CRD default on that field.
+// The controller applies it to objects that never received the default: ones
+// created before the field existed, and ones built in memory.
+const DefaultDeferTimeoutSeconds int32 = 600
+
 // Condition types and reasons on LLMScalerStatus.Conditions.
 const (
 	// ConditionDecisionAvailable is set under the Custom provider: true when the
@@ -49,8 +55,25 @@ const (
 	// replicas instead.
 	ConditionDecisionAvailable = "DecisionAvailable"
 
+	// ConditionScalingDeferred is true while a rollout or settle guard is holding
+	// a scale action back, and false once that action is written, forced after
+	// the deferral timeout, or no longer needed.
+	ConditionScalingDeferred = "ScalingDeferred"
+
 	ReasonDecisionReceived    = "DecisionReceived"
 	ReasonDecisionUnavailable = "DecisionUnavailable"
+
+	// ReasonRolloutInProgress means a Deployment rollout is in progress, so the
+	// scale action is held in both directions.
+	ReasonRolloutInProgress = "RolloutInProgress"
+	// ReasonScaleDownSettling means a scale-down is waiting for the target to
+	// finish absorbing the previous replica count.
+	ReasonScaleDownSettling = "ScaleDownSettling"
+	// ReasonDeferralTimedOut means the scale action was held longer than
+	// spec.deferTimeoutSeconds and was applied anyway.
+	ReasonDeferralTimedOut = "TimedOut"
+	// ReasonNotDeferred means this sync did not hold a scale action back.
+	ReasonNotDeferred = "NotDeferred"
 )
 
 // CustomProviderSpec configures the "Custom" metric provider: an external
@@ -223,6 +246,17 @@ type LLMScalerSpec struct {
 	// +optional
 	RetryPeriodSeconds int32 `json:"retryPeriodSeconds,omitempty"`
 
+	// deferTimeoutSeconds bounds how long the rollout or settle guard may hold
+	// a scale action back. Once it has been deferred this long, measured from
+	// status.deferredSince, the held write is applied anyway (still capped by
+	// scaleDown.maxStepReplicas) and a DeferralTimedOut warning event is
+	// emitted. 0 never forces, so the guards may then defer indefinitely.
+	// Defaults to 600.
+	// +kubebuilder:default=600
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	DeferTimeoutSeconds *int32 `json:"deferTimeoutSeconds,omitempty"`
+
 	// minReplicas is the lower limit for the number of replicas to which the
 	// autoscaler can scale down. 0 enables scale-to-zero: an idle target is
 	// scaled all the way down, and wakes back up when a metric evaluates to a
@@ -264,6 +298,21 @@ type LLMScalerStatus struct {
 	// +optional
 	DesiredReplicas int32 `json:"desiredReplicas"`
 
+	// appliedReplicas is the target's spec.replicas after this sync: the value
+	// just written, or the unchanged value when the sync deferred or had nothing
+	// to do.
+	// +optional
+	AppliedReplicas int32 `json:"appliedReplicas"`
+
+	// deferredSince is when the current deferral started. It is set on the first
+	// sync that holds a scale action back and kept unchanged while that deferral
+	// continues, even if the guard reason changes from rollout to settling,
+	// because it is one deferral. It is cleared on any successful write and on
+	// any no-op sync (the target is already at the step target). It lives in
+	// status so it survives operator restarts.
+	// +optional
+	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
+
 	// conditions represent the current state of the LLMScaler resource.
 	// +listType=map
 	// +listMapKey=type
@@ -277,6 +326,7 @@ type LLMScalerStatus struct {
 // +kubebuilder:printcolumn:name="MaxReplicas",type="integer",JSONPath=".spec.maxReplicas",description="The upper limit for the number of replicas"
 // +kubebuilder:printcolumn:name="CurrentReplicas",type="integer",JSONPath=".status.currentReplicas",description="The current number of replicas"
 // +kubebuilder:printcolumn:name="DesiredReplicas",type="integer",JSONPath=".status.desiredReplicas",description="The desired number of replicas"
+// +kubebuilder:printcolumn:name="Deferred",type="string",JSONPath=".status.conditions[?(@.type==\"ScalingDeferred\")].status",description="Whether a scale action is currently deferred"
 
 // LLMScaler is the Schema for the llmscalers API
 type LLMScaler struct {

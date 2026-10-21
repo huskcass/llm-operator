@@ -15,6 +15,7 @@ spec:
   maxReplicas: 5
   syncPeriodSeconds: 15
   retryPeriodSeconds: 10
+  deferTimeoutSeconds: 600
   metrics:
     # Scope the query to THIS deployment's pods (not just the model) so multiple
     # deployments serving the same model don't get averaged together.

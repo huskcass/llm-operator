@@ -39,6 +39,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -61,6 +63,19 @@ const (
 	// deploymentKind is the target kind that supports the rollout guard and
 	// pod-deletion-cost-based scale-down.
 	deploymentKind = "Deployment"
+
+	// eventReasonScalingDeferred is the Normal event emitted when a scale action
+	// starts being held back, or the guard reason changes. It is not repeated on
+	// every sync.
+	eventReasonScalingDeferred = "ScalingDeferred"
+	// eventReasonDeferralTimedOut is the Warning event emitted when the deferral
+	// timeout forces the write the guard was holding back.
+	eventReasonDeferralTimedOut = "DeferralTimedOut"
+
+	// msgRolloutInProgress is why the rollout guard holds a scale action.
+	msgRolloutInProgress = "Deployment rollout in progress"
+	// msgScaleDownNotSettled is why the settle guard holds a scale-down.
+	msgScaleDownNotSettled = "previous scale-down has not settled"
 )
 
 // scaleRecommendation is a timestamped desired-replica recommendation, retained
@@ -74,11 +89,24 @@ type scaleRecommendation struct {
 type LLMScalerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// Clock is the time source for deferral deadlines and scale-down
+	// stabilization. Nil uses the wall clock.
+	Clock clock.PassiveClock
+	// Recorder emits scaling events. Nil skips them.
+	Recorder events.EventRecorder
 
 	// recMu guards recommendations, the per-scaler history of desired-replica
 	// recommendations used for scale-down stabilization.
 	recMu           sync.Mutex
 	recommendations map[types.NamespacedName][]scaleRecommendation
+}
+
+// now returns the reconciler's clock, or the wall clock when none was injected.
+func (r *LLMScalerReconciler) now() time.Time {
+	if r.Clock == nil {
+		return time.Now()
+	}
+	return r.Clock.Now()
 }
 
 // +kubebuilder:rbac:groups=autoscaling.modelsphere.dev,resources=llmscalers,verbs=get;list;watch;create;update;patch;delete
@@ -88,6 +116,7 @@ type LLMScalerReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=leaderworkerset.x-k8s.io,resources=leaderworkersets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
@@ -131,19 +160,26 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: retryPeriod}, nil
 	}
 
-	// 2. Extract replica counts. The HPA-style calculation is scaled off the
-	// number of *ready* replicas (actual serving capacity) so we don't compound
-	// on pods that were just requested but haven't started yet. The scale-action
-	// decision compares against spec.replicas to avoid redundant writes.
+	// 2. Extract replica counts. The scale-action decision compares against
+	// spec.replicas to avoid redundant writes. The settle guard and
+	// status.currentReplicas use the raw ready count (a missing field reads as
+	// 0), so a fully-unready fleet is not mistaken for a settled one.
 	specReplicas, found, err := unstructured.NestedInt64(targetObj.Object, "spec", "replicas")
 	if err != nil || !found {
 		// Default to 1 if not explicitly set (or handle error)
 		specReplicas = 1
 	}
-	readyReplicas, found, err := unstructured.NestedInt64(targetObj.Object, "status", "readyReplicas")
-	if err != nil || !found || readyReplicas == 0 {
-		// No ready pods reported yet (e.g. initial rollout); fall back to spec.
-		readyReplicas = specReplicas
+	readyReplicas, _, err := unstructured.NestedInt64(targetObj.Object, "status", "readyReplicas")
+	if err != nil {
+		readyReplicas = 0
+	}
+	// The HPA-style ratio is scaled off *ready* replicas (actual serving
+	// capacity) so it doesn't compound on pods that were requested but haven't
+	// started. With none ready yet (e.g. initial rollout) there is no
+	// per-replica baseline, so the ratio alone falls back to spec.
+	metricReady := readyReplicas
+	if metricReady == 0 {
+		metricReady = specReplicas
 	}
 
 	logger.Info("Fetched target resource", "kind", targetRef.Kind, "specReplicas", specReplicas, "readyReplicas", readyReplicas)
@@ -151,7 +187,7 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 3. Compute the recommendation: metrics, clamped to min/max, damped on the
 	// way down by the stabilization window. This is what we want, independent of
 	// how fast we are allowed to get there.
-	recommendedReplicas := r.recommendReplicas(ctx, &scaler, req.NamespacedName, specReplicas, readyReplicas)
+	recommendedReplicas := r.recommendReplicas(ctx, &scaler, req.NamespacedName, specReplicas, metricReady)
 
 	// 4. Execute Scale Action, rate-limited by maxStepReplicas. The cap belongs
 	// here rather than in the recommendation: it governs how far a single write
@@ -163,13 +199,37 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Info("Scale-down step capped", "recommended", recommendedReplicas, "thisStep", targetReplicas, "maxStepReplicas", scaler.Spec.ScaleDown.MaxStepReplicas)
 	}
 
-	switch reason := scaleDeferReason(targetObj, targetRef.Kind, specReplicas, readyReplicas, targetReplicas); {
+	// One deferral timeout covers every guard. deferredSince lives in status, so
+	// the deadline survives an operator restart. applied is the target's
+	// spec.replicas after this sync; it only changes once a write succeeds, and
+	// a failed update returns before the status write, leaving deferredSince for
+	// the retry.
+	now := r.now()
+	timeout := deferTimeout(&scaler)
+	deferral := scaleDeferReason(targetObj, targetRef.Kind, specReplicas, readyReplicas, targetReplicas)
+	applied := int32(specReplicas)
+
+	switch {
 	case targetReplicas == int32(specReplicas):
-		// Already at the target; nothing to write.
-	case reason != "":
-		logger.Info("Deferring scaling", "reason", reason, "current", specReplicas, "ready", readyReplicas, "target", targetReplicas)
+		// Already at the step target. A guard that would have deferred is moot:
+		// there is nothing to hold back, so the deferral ends.
+		scaler.Status.DeferredSince = nil
+		setScalingDeferredCondition(&scaler, metav1.ConditionFalse, autoscalingv1alpha1.ReasonNotDeferred,
+			"replica count is already at the step target")
+	case deferral.reason != "" && !pastDeferTimeout(scaler.Status.DeferredSince, timeout, now):
+		r.holdScaleDeferred(&scaler, deferral, int32(specReplicas), targetReplicas, timeout, now)
+		logger.Info("Deferring scaling", "reason", deferral.message, "current", specReplicas, "ready", readyReplicas, "target", targetReplicas)
 	default:
-		logger.Info("Scaling target", "from", specReplicas, "to", targetReplicas)
+		forced := deferral.reason != ""
+		var timedOutEvent string
+		if forced {
+			elapsed := now.Sub(scaler.Status.DeferredSince.Time).Truncate(time.Second)
+			timedOutEvent = fmt.Sprintf("%s for %s (deferTimeoutSeconds %d); scaling %d -> %d anyway",
+				deferral.message, elapsed, int64(timeout/time.Second), specReplicas, targetReplicas)
+			logger.Info("Scaling target after deferral timeout", "reason", deferral.reason, "from", specReplicas, "to", targetReplicas, "deferredFor", elapsed)
+		} else {
+			logger.Info("Scaling target", "from", specReplicas, "to", targetReplicas)
+		}
 
 		if targetReplicas < int32(specReplicas) {
 			// Cache-Aware Scale-Down: bias the ReplicaSet toward removing the
@@ -210,13 +270,26 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// update leaves the target where it was, so there is nothing to hold at.
 		if targetReplicas < int32(specReplicas) {
 			r.holdAfterScaleDown(req.NamespacedName, targetReplicas,
-				time.Duration(scaler.Spec.ScaleDown.StabilizationWindowSeconds)*time.Second, time.Now())
+				time.Duration(scaler.Spec.ScaleDown.StabilizationWindowSeconds)*time.Second, now)
+		}
+
+		applied = targetReplicas
+		scaler.Status.DeferredSince = nil
+		if forced {
+			r.event(&scaler, corev1.EventTypeWarning, eventReasonDeferralTimedOut, timedOutEvent)
+			setScalingDeferredCondition(&scaler, metav1.ConditionFalse, autoscalingv1alpha1.ReasonDeferralTimedOut,
+				timedOutEvent)
+		} else {
+			setScalingDeferredCondition(&scaler, metav1.ConditionFalse, autoscalingv1alpha1.ReasonNotDeferred,
+				fmt.Sprintf("scaled %d -> %d", specReplicas, targetReplicas))
 		}
 	}
 
-	// 4. Update Status
+	// 4. Update Status. currentReplicas is the raw ready count, not the ratio
+	// baseline: a fully-unready fleet reports 0.
 	scaler.Status.CurrentReplicas = int32(readyReplicas)
 	scaler.Status.DesiredReplicas = recommendedReplicas
+	scaler.Status.AppliedReplicas = applied
 	if err := r.Status().Update(ctx, &scaler); err != nil {
 		logger.Error(err, "failed to update scaler status")
 		return ctrl.Result{}, err
@@ -236,18 +309,113 @@ func (r *LLMScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// scaleDeferral is why this sync must not write a new replica count.
+// An empty reason means the scale action may proceed. The guard checks
+// themselves are unchanged: a rollout holds both directions, and the settle
+// guard holds scale-down until the raw ready count is back at spec.
+type scaleDeferral struct {
+	// reason is the ScalingDeferred condition reason (RolloutInProgress or
+	// ScaleDownSettling), or "" when nothing defers.
+	reason string
+	// message is the human description of the guard, for the log and the condition.
+	message string
+}
+
 // scaleDeferReason reports why this sync must not write a new replica count, or
-// "" when the scale action may proceed. Both guards exist for the same reason: a
-// target that is still absorbing the last change gives unreliable readings, so
-// acting on them compounds the error.
-func scaleDeferReason(targetObj *unstructured.Unstructured, kind string, specReplicas, readyReplicas int64, targetReplicas int32) string {
+// an empty reason when the scale action may proceed. Both guards exist for the
+// same reason: a target that is still absorbing the last change gives unreliable
+// readings, so acting on them compounds the error.
+func scaleDeferReason(targetObj *unstructured.Unstructured, kind string, specReplicas, readyReplicas int64, targetReplicas int32) scaleDeferral {
 	if kind == deploymentKind && rolloutInProgress(targetObj, specReplicas) {
-		return "Deployment rollout in progress"
+		return scaleDeferral{reason: autoscalingv1alpha1.ReasonRolloutInProgress, message: msgRolloutInProgress}
 	}
 	if targetReplicas < int32(specReplicas) && !scaleDownSettled(targetObj, specReplicas, readyReplicas) {
-		return "previous scale-down has not settled"
+		return scaleDeferral{reason: autoscalingv1alpha1.ReasonScaleDownSettling, message: msgScaleDownNotSettled}
 	}
-	return ""
+	return scaleDeferral{}
+}
+
+// deferTimeout is how long a deferral may last before the held write is forced.
+// Nil spec.deferTimeoutSeconds is the CRD default: objects created before the
+// field existed, and objects built in memory, do not carry it.
+func deferTimeout(scaler *autoscalingv1alpha1.LLMScaler) time.Duration {
+	seconds := autoscalingv1alpha1.DefaultDeferTimeoutSeconds
+	if scaler.Spec.DeferTimeoutSeconds != nil {
+		seconds = *scaler.Spec.DeferTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// pastDeferTimeout reports whether an in-progress deferral has reached its
+// deadline. A timeout of 0 never expires, so the guards may defer
+// indefinitely. A nil deferredSince has not started, so it is not past
+// the deadline — the caller stamps it and waits.
+func pastDeferTimeout(since *metav1.Time, timeout time.Duration, now time.Time) bool {
+	if timeout <= 0 || since == nil {
+		return false
+	}
+	return now.Sub(since.Time) >= timeout
+}
+
+// holdScaleDeferred records that this sync is not writing targetReplicas.
+// deferredSince is stamped on entry and then left alone, so a guard reason that
+// changes from rollout to settling is still one deferral and the deadline does
+// not move. The Normal event fires on entry and when that reason changes, not
+// on every sync.
+func (r *LLMScalerReconciler) holdScaleDeferred(scaler *autoscalingv1alpha1.LLMScaler, deferral scaleDeferral, specReplicas, targetReplicas int32, timeout time.Duration, now time.Time) {
+	entering := scaler.Status.DeferredSince == nil
+	if entering {
+		stamped := metav1.NewTime(now)
+		scaler.Status.DeferredSince = &stamped
+	}
+	// Read the previous reason before overwriting the condition.
+	reasonChanged := scalingDeferredReasonChanged(scaler, deferral.reason)
+	msg := scalingDeferredMessage(specReplicas, targetReplicas, deferral.message, scaler.Status.DeferredSince.Time, timeout)
+	setScalingDeferredCondition(scaler, metav1.ConditionTrue, deferral.reason, msg)
+	if entering || reasonChanged {
+		r.event(scaler, corev1.EventTypeNormal, eventReasonScalingDeferred, msg)
+	}
+}
+
+// scalingDeferredReasonChanged reports whether the ScalingDeferred condition is
+// not already True with this guard reason. The caller uses it to avoid emitting
+// the same deferral event on every sync.
+func scalingDeferredReasonChanged(scaler *autoscalingv1alpha1.LLMScaler, reason string) bool {
+	prev := meta.FindStatusCondition(scaler.Status.Conditions, autoscalingv1alpha1.ConditionScalingDeferred)
+	if prev == nil || prev.Status != metav1.ConditionTrue {
+		return true
+	}
+	return prev.Reason != reason
+}
+
+// scalingDeferredMessage describes the scale action being held back. "wanted"
+// is the step-capped write, which is what the guard is holding, not the uncapped
+// recommendation (that stays on status.desiredReplicas).
+func scalingDeferredMessage(specReplicas, targetReplicas int32, guardMessage string, since time.Time, timeout time.Duration) string {
+	limit := "never forced (deferTimeoutSeconds is 0)"
+	if timeout > 0 {
+		limit = fmt.Sprintf("will apply after %ds", int64(timeout/time.Second))
+	}
+	return fmt.Sprintf("holding %d replicas (wanted %d): %s; deferred since %s, %s",
+		specReplicas, targetReplicas, guardMessage, since.UTC().Format(time.RFC3339), limit)
+}
+
+func setScalingDeferredCondition(scaler *autoscalingv1alpha1.LLMScaler, status metav1.ConditionStatus, reason, msg string) {
+	meta.SetStatusCondition(&scaler.Status.Conditions, metav1.Condition{
+		Type:               autoscalingv1alpha1.ConditionScalingDeferred,
+		Status:             status,
+		Reason:             reason,
+		Message:            msg,
+		ObservedGeneration: scaler.Generation,
+	})
+}
+
+func (r *LLMScalerReconciler) event(obj client.Object, eventType, reason, msg string) {
+	if r.Recorder == nil {
+		return
+	}
+	// The note is a %s argument so a message containing % is not treated as a format.
+	r.Recorder.Eventf(obj, nil, eventType, reason, reason, "%s", msg)
 }
 
 // checkTerminatingReplicas gates the drain half of the scale-down settle guard
@@ -386,7 +554,7 @@ func (r *LLMScalerReconciler) recommendReplicas(ctx context.Context, scaler *aut
 	// the window so a brief metric dip doesn't shrink the fleet. Scale-up stays
 	// immediate, since the current recommendation is then the window's max.
 	if window := time.Duration(scaler.Spec.ScaleDown.StabilizationWindowSeconds) * time.Second; window > 0 {
-		stabilized := r.stabilizeDesired(key, desiredReplicas, window, time.Now())
+		stabilized := r.stabilizeDesired(key, desiredReplicas, window, r.now())
 		if stabilized != desiredReplicas {
 			logger.Info("Scale-down stabilized", "raw", desiredReplicas, "stabilized", stabilized, "windowSeconds", scaler.Spec.ScaleDown.StabilizationWindowSeconds)
 		}
@@ -493,8 +661,9 @@ func (r *LLMScalerReconciler) computeDesiredFromMetrics(ctx context.Context, sca
 		// wake up. Evaluate against a single-replica baseline instead, so a
 		// positive signal (queue depth, pending requests) recommends ceil of
 		// the ratio and brings the fleet back. This only changes the at-zero
-		// case: otherwise the Reconcile fallback already set readyReplicas to
-		// specReplicas, which is >= 1.
+		// case. When the fleet is non-zero but none of it is ready, the caller
+		// passes specReplicas in for this ratio only; the settle guard and
+		// status.currentReplicas keep the raw ready count.
 		metricDesired := int32(math.Ceil(float64(max(readyReplicas, 1)) * ratio))
 		logger.Info("Metric calculation", "name", metric.Name, "query", metric.Query, "current", currentValue, "target", targetValue, "calculatedDesired", metricDesired)
 
