@@ -95,7 +95,10 @@ spec:
                   a scale action back. Once it has been deferred this long, measured from
                   status.deferredSince, the held write is applied anyway (still capped by
                   scaleDown.maxStepReplicas) and a DeferralTimedOut warning event is
-                  emitted. 0 never forces, so the guards may then defer indefinitely.
+                  emitted. That write does not restart the clock: while a guard still
+                  matches, later steps proceed at the sync pace instead of waiting out
+                  the timeout again. The clock is cleared only when a sync finds no guard
+                  matching. 0 never forces, so the guards may then defer indefinitely.
                   Defaults to 600.
                 format: int32
                 minimum: 0
@@ -376,11 +379,11 @@ spec:
               deferredSince:
                 description: |-
                   deferredSince is when the current deferral started. It is set on the first
-                  sync that holds a scale action back and kept unchanged while that deferral
-                  continues, even if the guard reason changes from rollout to settling,
-                  because it is one deferral. It is cleared on any successful write and on
-                  any no-op sync (the target is already at the step target). It lives in
-                  status so it survives operator restarts.
+                  sync that holds a scale action back. It is kept across guard reason
+                  changes, across no-op syncs while a guard still matches, and across
+                  forced writes. It is cleared only when a sync finds no guard matching:
+                  a normal write, or a no-op with no guard. A no-op does not start it.
+                  It lives in status so it survives operator restarts.
                 format: date-time
                 type: string
               desiredReplicas:

@@ -56,8 +56,9 @@ const (
 	ConditionDecisionAvailable = "DecisionAvailable"
 
 	// ConditionScalingDeferred is true while a rollout or settle guard is holding
-	// a scale action back, and false once that action is written, forced after
-	// the deferral timeout, or no longer needed.
+	// a scale action back, including a no-op sync whose deferral clock is still
+	// running. It is false when this sync wrote (a normal write or one forced
+	// after the timeout) or when nothing is deferred.
 	ConditionScalingDeferred = "ScalingDeferred"
 
 	ReasonDecisionReceived    = "DecisionReceived"
@@ -70,9 +71,14 @@ const (
 	// finish absorbing the previous replica count.
 	ReasonScaleDownSettling = "ScaleDownSettling"
 	// ReasonDeferralTimedOut means the scale action was held longer than
-	// spec.deferTimeoutSeconds and was applied anyway.
-	ReasonDeferralTimedOut = "TimedOut"
-	// ReasonNotDeferred means this sync did not hold a scale action back.
+	// spec.deferTimeoutSeconds and was applied anyway. The value matches the
+	// DeferralTimedOut event. The deferral clock keeps running when the guard
+	// still matches.
+	ReasonDeferralTimedOut = "DeferralTimedOut"
+	// ReasonNotDeferred means this sync found no guard matching: it wrote, or
+	// it was a no-op that did not have a deferral in progress. A no-op does not
+	// start a deferral, and a no-op while a guard still matches is not this
+	// reason when deferredSince is already set.
 	ReasonNotDeferred = "NotDeferred"
 )
 
@@ -250,7 +256,10 @@ type LLMScalerSpec struct {
 	// a scale action back. Once it has been deferred this long, measured from
 	// status.deferredSince, the held write is applied anyway (still capped by
 	// scaleDown.maxStepReplicas) and a DeferralTimedOut warning event is
-	// emitted. 0 never forces, so the guards may then defer indefinitely.
+	// emitted. That write does not restart the clock: while a guard still
+	// matches, later steps proceed at the sync pace instead of waiting out
+	// the timeout again. The clock is cleared only when a sync finds no guard
+	// matching. 0 never forces, so the guards may then defer indefinitely.
 	// Defaults to 600.
 	// +kubebuilder:default=600
 	// +kubebuilder:validation:Minimum=0
@@ -305,11 +314,11 @@ type LLMScalerStatus struct {
 	AppliedReplicas int32 `json:"appliedReplicas"`
 
 	// deferredSince is when the current deferral started. It is set on the first
-	// sync that holds a scale action back and kept unchanged while that deferral
-	// continues, even if the guard reason changes from rollout to settling,
-	// because it is one deferral. It is cleared on any successful write and on
-	// any no-op sync (the target is already at the step target). It lives in
-	// status so it survives operator restarts.
+	// sync that holds a scale action back. It is kept across guard reason
+	// changes, across no-op syncs while a guard still matches, and across
+	// forced writes. It is cleared only when a sync finds no guard matching:
+	// a normal write, or a no-op with no guard. A no-op does not start it.
+	// It lives in status so it survives operator restarts.
 	// +optional
 	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
 

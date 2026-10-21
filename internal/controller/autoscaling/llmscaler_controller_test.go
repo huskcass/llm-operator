@@ -559,6 +559,41 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
 		}
 
+		// setUnreadyReplicas parks the Deployment at n replicas, fully observed,
+		// with nothing ready, so the settle guard matches and the rollout guard
+		// does not. availableReplicas must be 0 too: the apiserver rejects
+		// availableReplicas > readyReplicas.
+		setUnreadyReplicas := func(n int32) {
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			deploy.Spec.Replicas = &n
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = n
+			deploy.Status.UpdatedReplicas = n
+			deploy.Status.ReadyReplicas = 0
+			deploy.Status.AvailableReplicas = 0
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+		}
+
+		// observeSpec marks the Deployment observed at its current spec with the
+		// given ready count. A replica write bumps generation, and envtest runs
+		// no Deployment controller; without this the next sync sees a rollout.
+		observeSpec := func(ready int32) {
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			n := int32(1)
+			if deploy.Spec.Replicas != nil {
+				n = *deploy.Spec.Replicas
+			}
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = n
+			deploy.Status.UpdatedReplicas = n
+			deploy.Status.ReadyReplicas = ready
+			deploy.Status.AvailableReplicas = ready
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+		}
+
 		It("should default deferTimeoutSeconds to 600", func() {
 			scaler := &autoscalingv1alpha1.LLMScaler{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
@@ -576,8 +611,11 @@ var _ = Describe("LLMScaler Controller", func() {
 			r := newScalerReconciler(clk, rec)
 
 			By("deferring the first sync and stamping deferredSince")
-			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+			// Deadline is 60s out and the default sync period is 15s, so the
+			// wait is the sync period.
+			Expect(result.RequeueAfter).To(Equal(15 * time.Second))
 
 			deploy := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
@@ -606,8 +644,10 @@ var _ = Describe("LLMScaler Controller", func() {
 
 			By("reconciling again before the timeout, without restamping or rewriting")
 			clk.SetTime(deferralStart.Add(59 * time.Second))
-			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			result, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+			// One second remains until the deadline, under the sync period.
+			Expect(result.RequeueAfter).To(Equal(time.Second))
 
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
@@ -618,20 +658,26 @@ var _ = Describe("LLMScaler Controller", func() {
 
 			By("advancing past the timeout and forcing the held scale-up")
 			clk.SetTime(deferralStart.Add(60 * time.Second))
-			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			result, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(2)))
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
-			Expect(scaler.Status.DeferredSince).To(BeNil())
+			// The rollout guard still matches after the write, so the clock
+			// stays where the deferral started.
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
 			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(2)))
 			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(2)))
 			cond = scalingDeferredCondition(scaler)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(autoscalingv1alpha1.ReasonDeferralTimedOut).To(Equal("DeferralTimedOut"))
 			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
 			Expect(cond.ObservedGeneration).To(Equal(scaler.Generation))
 			Expect(cond.Message).To(ContainSubstring("scaling 1 -> 2 anyway"))
+			// The forced write itself is not a hold, so the next sync is a full period.
+			Expect(result.RequeueAfter).To(Equal(15 * time.Second))
 
 			Expect(rec.Events).To(Receive(&ev))
 			Expect(ev).To(HavePrefix("Warning " + eventReasonDeferralTimedOut))
@@ -706,7 +752,10 @@ var _ = Describe("LLMScaler Controller", func() {
 
 			Expect(replicasNow()).To(Equal(int32(3)))
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
-			Expect(scaler.Status.DeferredSince).To(BeNil())
+			// None of the pods are ready, so the settle guard still matches and
+			// the clock is not restarted for the next step.
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
 			Expect(scaler.Status.DesiredReplicas).To(Equal(int32(1)))
 			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(3)))
 			Expect(scaler.Status.CurrentReplicas).To(Equal(int32(0)))
@@ -800,7 +849,10 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(2)))
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
-			Expect(scaler.Status.DeferredSince).To(BeNil())
+			// The rollout is still in progress, so the deadline carried in
+			// status is what forced the write and it stays put.
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", past.Time))
 			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(2)))
 			cond := scalingDeferredCondition(scaler)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -825,8 +877,11 @@ var _ = Describe("LLMScaler Controller", func() {
 			clk := testingclock.NewFakeClock(deferralStart)
 			rec := events.NewFakeRecorder(8)
 			r := newScalerReconciler(clk, rec)
-			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+			// Timeout 0 never forces, so the wait stays the sync period even
+			// though the recorded deferral is already a day old.
+			Expect(result.RequeueAfter).To(Equal(15 * time.Second))
 
 			deploy := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
@@ -845,7 +900,7 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(rec.Events).NotTo(Receive())
 		})
 
-		It("should clear a deferral when the sync becomes a no-op", func() {
+		It("should clear a deferral on a no-op once no guard matches", func() {
 			setDeferTimeout(60)
 			markRollout()
 
@@ -858,18 +913,25 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
 			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
 
-			By("making the recommendation match spec while the rollout is still in progress")
-			// ceil(1 * 0.5/0.5) = 1, which is already spec. The rollout guard would
-			// still match, but there is nothing to hold back, so the deferral ends.
+			By("finishing the rollout at the replica count the metric already wants")
+			// ceil(1 * 0.5/0.5) = 1, which is already spec, and the rollout is
+			// done, so no guard matches. The no-op ends the deferral.
 			mockValue = "0.5"
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
+			deploy.Status.ObservedGeneration = deploy.Generation
+			deploy.Status.Replicas = 1
+			deploy.Status.UpdatedReplicas = 1
+			deploy.Status.ReadyReplicas = 1
+			deploy.Status.AvailableReplicas = 1
+			Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+
 			clk.SetTime(deferralStart.Add(10 * time.Second))
 			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
-			deploy := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: targetDeployName, Namespace: scalerNamespace}, deploy)).To(Succeed())
 			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
-			Expect(deploy.Status.UpdatedReplicas).To(Equal(int32(0)))
 			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
 			Expect(scaler.Status.DeferredSince).To(BeNil())
 			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
@@ -877,6 +939,251 @@ var _ = Describe("LLMScaler Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonNotDeferred))
 			Expect(cond.Message).To(ContainSubstring("already at the step target"))
+			_, paced := r.lastForcedWriteAt(typeNamespacedName)
+			Expect(paced).To(BeFalse())
+		})
+
+		It("should keep deferredSince across no-op syncs while a rollout guard still matches", func() {
+			setDeferTimeout(60)
+			markRollout()
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			r := newScalerReconciler(clk, events.NewFakeRecorder(8))
+
+			By("not starting a deferral on a no-op, even though the rollout guard matches")
+			// ceil(1 * 0.5/0.5) = 1, already spec. The guard matches, but there
+			// is nothing to hold, so deferredSince stays nil.
+			mockValue = "0.5"
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonNotDeferred))
+			Expect(replicasNow()).To(Equal(int32(1)))
+
+			By("stamping deferredSince on the first sync that actually wants to write")
+			// ceil(1 * 0.85/0.5) = 2.
+			mockValue = "0.85"
+			clk.SetTime(deferralStart.Add(10 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).NotTo(BeNil())
+			stamped := scaler.Status.DeferredSince.Time
+			Expect(stamped).To(BeTemporally("==", deferralStart.Add(10*time.Second)))
+			Expect(replicasNow()).To(Equal(int32(1)))
+			cond = scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonRolloutInProgress))
+
+			By("alternating a no-op with a held scale-up; the no-ops must not move the clock")
+			for _, step := range []struct {
+				at    time.Duration
+				value string
+				noop  bool
+			}{
+				{20 * time.Second, "0.5", true},
+				{30 * time.Second, "0.85", false},
+				{40 * time.Second, "0.5", true},
+			} {
+				mockValue = step.value
+				clk.SetTime(deferralStart.Add(step.at))
+				_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(replicasNow()).To(Equal(int32(1)))
+				Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+				Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", stamped))
+				cond = scalingDeferredCondition(scaler)
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonRolloutInProgress))
+				if step.noop {
+					Expect(cond.Message).To(ContainSubstring("nothing to write this sync"))
+					Expect(cond.Message).To(ContainSubstring("guard is still active"))
+					Expect(cond.Message).To(ContainSubstring("deferral clock keeps running"))
+					Expect(cond.Message).To(ContainSubstring(stamped.UTC().Format(time.RFC3339)))
+					Expect(cond.Message).To(ContainSubstring(msgRolloutInProgress))
+				}
+			}
+
+			By("forcing the held scale-up once the original deadline passes")
+			mockValue = "0.85"
+			clk.SetTime(stamped.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(2)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", stamped))
+			cond = scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
+			Expect(cond.Message).To(ContainSubstring("scaling 1 -> 2 anyway"))
+		})
+
+		It("should force the next stuck scale-down step after one sync period", func() {
+			By("capping the step and parking 5 replicas with none ready")
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			timeout := int32(60)
+			sync := int32(15)
+			scaler.Spec.DeferTimeoutSeconds = &timeout
+			scaler.Spec.SyncPeriodSeconds = sync
+			scaler.Spec.ScaleDown.MaxStepReplicas = 2
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+			setUnreadyReplicas(5)
+			mockValue = "0"
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			r := newScalerReconciler(clk, events.NewFakeRecorder(8))
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(5)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			Expect(scalingDeferredCondition(scaler).Reason).To(Equal(autoscalingv1alpha1.ReasonScaleDownSettling))
+
+			By("forcing the first step once the timeout elapses")
+			clk.SetTime(deferralStart.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(3)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			forcedAt, ok := r.lastForcedWriteAt(typeNamespacedName)
+			Expect(ok).To(BeTrue())
+			Expect(forcedAt).To(BeTemporally("==", deferralStart.Add(60*time.Second)))
+
+			By("keeping the fleet unready and taking the next step one sync period later, without another timeout")
+			// The spec write bumped generation. Observe it with nothing ready
+			// so the settle guard, not a phantom rollout, is what still matches.
+			observeSpec(0)
+			clk.SetTime(deferralStart.Add(60*time.Second + time.Duration(sync)*time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(1)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonDeferralTimedOut))
+			Expect(cond.Message).To(ContainSubstring("scaling 3 -> 1 anyway"))
+			Expect(cond.Message).To(ContainSubstring(msgScaleDownNotSettled))
+		})
+
+		It("should not take a second forced step until a sync period has elapsed", func() {
+			By("forcing one scale-down step of an unready fleet")
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			timeout := int32(60)
+			sync := int32(15)
+			scaler.Spec.DeferTimeoutSeconds = &timeout
+			scaler.Spec.SyncPeriodSeconds = sync
+			scaler.Spec.ScaleDown.MaxStepReplicas = 2
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+			setUnreadyReplicas(5)
+			mockValue = "0"
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			r := newScalerReconciler(clk, events.NewFakeRecorder(8))
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			held := scaler.DeepCopy()
+
+			clk.SetTime(deferralStart.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(3)))
+
+			By("putting the status back to its pre-write state, as if that update had conflicted")
+			// The target write stuck at 3. The status write that would have
+			// recorded it did not, so a retry still sees the deadline passed.
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			scaler.Status = held.Status
+			Expect(k8sClient.Status().Update(ctx, scaler)).To(Succeed())
+
+			By("reconciling again with the clock unchanged, which must not take the next step")
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(3)))
+			Expect(result.RequeueAfter).To(Equal(time.Duration(sync) * time.Second))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(3)))
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Message).To(ContainSubstring("forced write paced to one per sync period"))
+
+			By("still holding one second short of the sync period")
+			clk.SetTime(deferralStart.Add(60*time.Second + 14*time.Second))
+			result, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(3)))
+			Expect(result.RequeueAfter).To(Equal(time.Second))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+
+			By("forcing the next step once the sync period has elapsed")
+			clk.SetTime(deferralStart.Add(60*time.Second + time.Duration(sync)*time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(1)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+			Expect(scaler.Status.AppliedReplicas).To(Equal(int32(1)))
+		})
+
+		It("should clear deferredSince and the forced-write pace when no guard matches", func() {
+			scaler := &autoscalingv1alpha1.LLMScaler{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			timeout := int32(60)
+			scaler.Spec.DeferTimeoutSeconds = &timeout
+			scaler.Spec.ScaleDown.MaxStepReplicas = 2
+			Expect(k8sClient.Update(ctx, scaler)).To(Succeed())
+			setUnreadyReplicas(5)
+			mockValue = "0"
+
+			clk := testingclock.NewFakeClock(deferralStart)
+			r := newScalerReconciler(clk, events.NewFakeRecorder(8))
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			clk.SetTime(deferralStart.Add(60 * time.Second))
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replicasNow()).To(Equal(int32(3)))
+			_, paced := r.lastForcedWriteAt(typeNamespacedName)
+			Expect(paced).To(BeTrue())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince.Time).To(BeTemporally("==", deferralStart))
+
+			By("letting the fleet become ready at the replica count just written")
+			// Settled and fully observed: the next scale-down is an ordinary
+			// write, not a forced one, even though the pace has not elapsed.
+			observeSpec(3)
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(replicasNow()).To(Equal(int32(1)))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, scaler)).To(Succeed())
+			Expect(scaler.Status.DeferredSince).To(BeNil())
+			cond := scalingDeferredCondition(scaler)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(autoscalingv1alpha1.ReasonNotDeferred))
+			Expect(cond.Message).To(ContainSubstring("scaled 3 -> 1"))
+			_, paced = r.lastForcedWriteAt(typeNamespacedName)
+			Expect(paced).To(BeFalse())
 		})
 
 		It("should keep the ready-replica fallback for the scaling ratio only", func() {
@@ -1166,6 +1473,79 @@ func TestPastDeferTimeout(t *testing.T) {
 	}
 	if !pastDeferTimeout(&since, time.Minute, t0.Add(time.Minute+time.Second)) {
 		t.Fatal("past the timeout should be past")
+	}
+}
+
+func TestDeferralRequeueAfter(t *testing.T) {
+	sync := 15 * time.Second
+	tests := []struct {
+		name                         string
+		holding                      bool
+		timeout, until, pacing, want time.Duration
+	}{
+		{name: "deadline sooner than sync period", holding: true, timeout: time.Minute, until: 5 * time.Second, want: 5 * time.Second},
+		{name: "deadline later than sync period", holding: true, timeout: time.Minute, until: 30 * time.Second, want: sync},
+		{name: "deadline already passed", holding: true, timeout: time.Minute, until: -time.Second, want: time.Second},
+		{name: "deadline due this instant", holding: true, timeout: time.Minute, until: 0, want: time.Second},
+		{name: "deadline under the 1s floor", holding: true, timeout: time.Minute, until: 200 * time.Millisecond, want: time.Second},
+		{name: "timeout 0 stays on sync period", holding: true, timeout: 0, until: 5 * time.Second, want: sync},
+		{name: "not holding stays on sync period", holding: false, timeout: time.Minute, until: 5 * time.Second, want: sync},
+		{name: "pacing sooner than sync period", holding: true, timeout: time.Minute, until: -time.Second, pacing: 4 * time.Second, want: 4 * time.Second},
+		{name: "pacing later than sync period", holding: true, timeout: time.Minute, until: -time.Second, pacing: 30 * time.Second, want: sync},
+		{name: "pacing under the 1s floor", holding: true, timeout: time.Minute, until: -time.Second, pacing: 100 * time.Millisecond, want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deferralRequeueAfter(sync, tt.holding, tt.timeout, tt.until, tt.pacing)
+			if got != tt.want {
+				t.Fatalf("got %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestForcedWritePace(t *testing.T) {
+	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	sync := 15 * time.Second
+	if allowed, remaining := forcedWritePace(start, false, sync, start); !allowed || remaining != 0 {
+		t.Fatalf("no record: allowed=%v remaining=%s", allowed, remaining)
+	}
+	if allowed, remaining := forcedWritePace(start, true, 0, start.Add(time.Hour)); !allowed || remaining != 0 {
+		t.Fatalf("zero sync period: allowed=%v remaining=%s", allowed, remaining)
+	}
+	if allowed, _ := forcedWritePace(start, true, sync, start.Add(sync)); !allowed {
+		t.Fatal("exactly one sync period should allow the next forced write")
+	}
+	if allowed, _ := forcedWritePace(start, true, sync, start); allowed {
+		t.Fatal("a forced write just recorded should not allow another")
+	}
+	allowed, remaining := forcedWritePace(start, true, sync, start.Add(14*time.Second))
+	if allowed || remaining != time.Second {
+		t.Fatalf("14s into 15s: allowed=%v remaining=%s", allowed, remaining)
+	}
+}
+
+func TestDeferralMemoryClearedOnEndAndDelete(t *testing.T) {
+	r := &LLMScalerReconciler{}
+	key := types.NamespacedName{Namespace: "ns", Name: "s"}
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	r.recordForcedWrite(key, now)
+	scaler := &autoscalingv1alpha1.LLMScaler{}
+	stamped := metav1.NewTime(now)
+	scaler.Status.DeferredSince = &stamped
+
+	r.endDeferral(key, scaler)
+	if scaler.Status.DeferredSince != nil {
+		t.Fatal("endDeferral left deferredSince set")
+	}
+	if _, ok := r.lastForcedWriteAt(key); ok {
+		t.Fatal("endDeferral left the forced-write record")
+	}
+
+	r.recordForcedWrite(key, now)
+	r.forgetRecommendations(key)
+	if _, ok := r.lastForcedWriteAt(key); ok {
+		t.Fatal("forgetRecommendations left the forced-write record")
 	}
 }
 
