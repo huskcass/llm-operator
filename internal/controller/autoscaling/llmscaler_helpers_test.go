@@ -26,7 +26,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
 	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/autoscaling/v1alpha1"
@@ -165,43 +164,6 @@ func TestDeferralMemoryClearedOnEndAndDelete(t *testing.T) {
 func TestReasonDeferralTimedOut(t *testing.T) {
 	if autoscalingv1alpha1.ReasonDeferralTimedOut != "DeferralTimedOut" {
 		t.Fatalf("ReasonDeferralTimedOut = %q, want DeferralTimedOut", autoscalingv1alpha1.ReasonDeferralTimedOut)
-	}
-}
-
-// deploymentObject builds a Deployment-shaped object for the guard tests.
-// status.replicas stays at 5; the cases vary generation and updatedReplicas.
-func deploymentObject(gen, observed, updated int64) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"generation": gen},
-		"status": map[string]any{
-			"observedGeneration": observed,
-			"updatedReplicas":    updated,
-			"replicas":           int64(5),
-		},
-	}}
-}
-
-type scaleDeferReasonCase struct {
-	name        string
-	gen         int64
-	observed    int64
-	updated     int64
-	kind        string
-	spec        int64
-	ready       int64
-	target      int32
-	wantReason  string
-	wantMessage string
-}
-
-func TestScaleDeferReason(t *testing.T) {
-	for _, tc := range scaleDeferReasonCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := scaleDeferReason(deploymentObject(tc.gen, tc.observed, tc.updated), tc.kind, tc.spec, tc.ready, tc.target)
-			if got.reason != tc.wantReason || got.message != tc.wantMessage {
-				t.Fatalf("got {%q %q}, want {%q %q}", got.reason, got.message, tc.wantReason, tc.wantMessage)
-			}
-		})
 	}
 }
 

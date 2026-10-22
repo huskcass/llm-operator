@@ -66,58 +66,6 @@ var forcedWritePaceCases = []forcedWritePaceCase{
 	{name: "14s into a 15s period", recorded: true, sync: 15 * time.Second, at: 14 * time.Second, wantAllowed: false, wantRemaining: ptr(time.Second)},
 }
 
-// scaleDeferReasonCases are the guard result the controller turns into a
-// condition. readyReplicas is the raw count: 0 does not count as settled.
-// gen/observed/updated build the Deployment-shaped object: status.replicas
-// stays at 5 inside the builder.
-var scaleDeferReasonCases = []scaleDeferReasonCase{
-	{
-		name: "rollout holds a scale-up",
-		gen:  4, observed: 3, updated: 5,
-		kind: deploymentKind, spec: 5, ready: 5, target: 7,
-		wantReason:  autoscalingv1alpha1.ReasonRolloutInProgress,
-		wantMessage: msgRolloutInProgress,
-	},
-	{
-		name: "rollout wins over an unsettled scale-down",
-		gen:  4, observed: 3, updated: 5,
-		kind: deploymentKind, spec: 5, ready: 2, target: 3,
-		wantReason:  autoscalingv1alpha1.ReasonRolloutInProgress,
-		wantMessage: msgRolloutInProgress,
-	},
-	{
-		name: "unsettled scale-down",
-		gen:  3, observed: 3, updated: 5, // fully rolled out
-		kind: deploymentKind, spec: 5, ready: 3, target: 4,
-		wantReason:  autoscalingv1alpha1.ReasonScaleDownSettling,
-		wantMessage: msgScaleDownNotSettled,
-	},
-	{
-		// A missing status.readyReplicas is passed in as 0. Treating it as
-		// spec would skip the guard.
-		name: "ready count of 0 is not settled",
-		gen:  3, observed: 3, updated: 5,
-		kind: deploymentKind, spec: 5, ready: 0, target: 4,
-		wantReason:  autoscalingv1alpha1.ReasonScaleDownSettling,
-		wantMessage: msgScaleDownNotSettled,
-	},
-	{
-		name: "settled scale-down may proceed",
-		gen:  3, observed: 3, updated: 5,
-		kind: deploymentKind, spec: 5, ready: 5, target: 4,
-	},
-	{
-		name: "scale-up is not gated on settle",
-		gen:  3, observed: 3, updated: 5,
-		kind: deploymentKind, spec: 5, ready: 2, target: 6,
-	},
-	{
-		name: "non-Deployment ignores the rollout guard",
-		gen:  4, observed: 1, updated: 0,
-		kind: "StatefulSet", spec: 5, ready: 5, target: 7,
-	},
-}
-
 // stabilizationSequenceCases run an ordered list of recommend/hold ops on one
 // fresh reconciler per case. at is an offset from the runner's fixed base,
 // not the wall clock. TestStabilizeDesired and TestHoldAfterScaleDown are both

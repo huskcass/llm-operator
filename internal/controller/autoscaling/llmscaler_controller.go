@@ -71,11 +71,6 @@ const (
 	// eventReasonDeferralTimedOut is the Warning event emitted when the deferral
 	// timeout forces the write the guard was holding back.
 	eventReasonDeferralTimedOut = "DeferralTimedOut"
-
-	// msgRolloutInProgress is why the rollout guard holds a scale action.
-	msgRolloutInProgress = "Deployment rollout in progress"
-	// msgScaleDownNotSettled is why the settle guard holds a scale-down.
-	msgScaleDownNotSettled = "previous scale-down has not settled"
 )
 
 // scaleRecommendation is a timestamped desired-replica recommendation, retained
@@ -170,19 +165,15 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: retryPeriod}, nil
 	}
 
-	// 2. Extract replica counts. The scale-action decision compares against
+	// 2. Read the target once. The scale-action decision compares against
 	// spec.replicas to avoid redundant writes. The settle guard and
 	// status.currentReplicas use the raw ready count (a missing field reads as
 	// 0), so a fully-unready fleet is not mistaken for a settled one.
-	specReplicas, found, err := unstructured.NestedInt64(targetObj.Object, "spec", "replicas")
-	if err != nil || !found {
-		// Default to 1 if not explicitly set (or handle error)
-		specReplicas = 1
-	}
-	readyReplicas, _, err := unstructured.NestedInt64(targetObj.Object, "status", "readyReplicas")
-	if err != nil {
-		readyReplicas = 0
-	}
+	state := readWorkloadState(targetObj, targetRef.Kind)
+	// Widen back to the int64 the logs and the metric path already use.
+	// In-range replica counts are unchanged; see nestedReplica.
+	specReplicas := int64(state.Spec)
+	readyReplicas := int64(state.Ready)
 	// The HPA-style ratio is scaled off *ready* replicas (actual serving
 	// capacity) so it doesn't compound on pods that were requested but haven't
 	// started. With none ready yet (e.g. initial rollout) there is no
@@ -217,7 +208,7 @@ func (r *LLMScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// update returns before the status write.
 	now := r.now()
 	timeout := deferTimeout(&scaler)
-	deferral := scaleDeferReason(targetObj, targetRef.Kind, specReplicas, readyReplicas, targetReplicas)
+	deferral := evaluateGuards(state, ScaleIntent{From: state.Spec, To: targetReplicas})
 	applied := int32(specReplicas)
 	noop := targetReplicas == int32(specReplicas)
 	guarded := deferral.reason != ""
@@ -363,32 +354,6 @@ func (r *LLMScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&autoscalingv1alpha1.LLMScaler{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("llmscaler").
 		Complete(r)
-}
-
-// scaleDeferral is why this sync must not write a new replica count.
-// An empty reason means the scale action may proceed. The guard checks
-// themselves are unchanged: a rollout holds both directions, and the settle
-// guard holds scale-down until the raw ready count is back at spec.
-type scaleDeferral struct {
-	// reason is the ScalingDeferred condition reason (RolloutInProgress or
-	// ScaleDownSettling), or "" when nothing defers.
-	reason string
-	// message is the human description of the guard, for the log and the condition.
-	message string
-}
-
-// scaleDeferReason reports why this sync must not write a new replica count, or
-// an empty reason when the scale action may proceed. Both guards exist for the
-// same reason: a target that is still absorbing the last change gives unreliable
-// readings, so acting on them compounds the error.
-func scaleDeferReason(targetObj *unstructured.Unstructured, kind string, specReplicas, readyReplicas int64, targetReplicas int32) scaleDeferral {
-	if kind == deploymentKind && rolloutInProgress(targetObj, specReplicas) {
-		return scaleDeferral{reason: autoscalingv1alpha1.ReasonRolloutInProgress, message: msgRolloutInProgress}
-	}
-	if targetReplicas < int32(specReplicas) && !scaleDownSettled(targetObj, specReplicas, readyReplicas) {
-		return scaleDeferral{reason: autoscalingv1alpha1.ReasonScaleDownSettling, message: msgScaleDownNotSettled}
-	}
-	return scaleDeferral{}
 }
 
 // deferTimeout is how long a deferral may last before the held write is forced.
@@ -576,68 +541,6 @@ func (r *LLMScalerReconciler) event(obj client.Object, eventType, reason, msg st
 	}
 	// The note is a %s argument so a message containing % is not treated as a format.
 	r.Recorder.Eventf(obj, nil, eventType, reason, reason, "%s", msg)
-}
-
-// checkTerminatingReplicas gates the drain half of the scale-down settle guard
-// (see scaleDownSettled).
-var checkTerminatingReplicas = false
-
-// scaleDownSettled reports whether the target has finished absorbing the previous
-// scale-down, so the next step may start. Scale-up is deliberately not gated on
-// this — capacity is added as soon as the metric warrants it.
-//
-// Two conditions, both read off the target's own status:
-//
-//   - readyReplicas == specReplicas — the fleet has converged on the last write.
-//     Also catches the window just after a write, where readyReplicas is still
-//     the old, higher count.
-//   - terminatingReplicas == 0 — no pod is still draining. Only applied when
-//     checkTerminatingReplicas is on.
-//
-// The second is not redundant. Per the apps/v1 API, a Deployment's
-// status.readyReplicas counts "non-terminating pods ... with a Ready Condition",
-// so a pod leaves that count the moment it gets a deletionTimestamp — long before
-// it exits. Under a long preStop drain the readyReplicas check alone reports
-// "settled" while the sacrificed pods are still serving traffic, still scraped
-// into the metric average, and still holding their GPUs. That is the current
-// behavior with the gate off: the guard then only bridges the brief window
-// between our write and the workload controller reflecting it in status.
-//
-// terminatingReplicas is a beta field (enabled by default); on a cluster that does
-// not report it — or on a StatefulSet/LWS target, which has no such field — the
-// check degrades to the readyReplicas condition alone even when gated on.
-func scaleDownSettled(targetObj *unstructured.Unstructured, specReplicas, readyReplicas int64) bool {
-	if readyReplicas != specReplicas {
-		return false
-	}
-	if !checkTerminatingReplicas {
-		return true
-	}
-	terminating, found, err := unstructured.NestedInt64(targetObj.Object, "status", "terminatingReplicas")
-	if err != nil || !found {
-		return true
-	}
-	return terminating == 0
-}
-
-// rolloutInProgress reports whether a Deployment target is mid-rollout: the
-// controller hasn't observed the latest spec, not every replica is on the new
-// pod template, or old-template pods still exist. During a rollout the metric
-// average and cache-warmth ranking are unreliable, so scaling is deferred.
-// A pure replica change (scaling) is not a template rollout, so this stays false
-// for it once the new pods are created.
-func rolloutInProgress(targetObj *unstructured.Unstructured, specReplicas int64) bool {
-	gen, _, _ := unstructured.NestedInt64(targetObj.Object, "metadata", "generation")
-	observedGen, _, _ := unstructured.NestedInt64(targetObj.Object, "status", "observedGeneration")
-	if observedGen < gen {
-		return true // latest spec not yet acted on
-	}
-
-	updated, _, _ := unstructured.NestedInt64(targetObj.Object, "status", "updatedReplicas")
-	total, _, _ := unstructured.NestedInt64(targetObj.Object, "status", "replicas")
-	// In progress until every replica is on the new template and no older
-	// template pods remain.
-	return updated < specReplicas || total > updated
 }
 
 // stabilizeDesired records the latest desired-replica recommendation for a
