@@ -1,0 +1,15 @@
+name: does-not-call-helm-when-the-spec-is-unchanged
+description: does not call helm when the spec is unchanged
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: update
+    annotations:
+      swiss.modelsphere.dev/note: later
+  - action: reconcile
+    expect:
+      installs: 1
+      upgrades: 0
+      gets: 1

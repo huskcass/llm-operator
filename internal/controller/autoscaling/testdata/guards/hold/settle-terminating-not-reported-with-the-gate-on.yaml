@@ -1,0 +1,17 @@
+# The count is ignored when the field was not reported. A non-zero Terminating here would still be settled; the parser stores 0 in that case, so this row is what makes the flag observable.
+"name": "settle-terminating-not-reported-with-the-gate-on"
+"description": "settle: terminating not reported with the gate on"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 5
+    "terminating": 4
+    "terminatingReported": false
+  "intent":
+    "from": 5
+    "to": 4
+  "checkTerminating": true
+"expected":
+  "held": false
+  "reason": "ScaleDownSettling"

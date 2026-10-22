@@ -1,0 +1,8 @@
+"name": "leaves-scale-up-untouched"
+"description": "leaves scale-up untouched"
+"inputs":
+  "current": 2
+  "desired": 10
+  "maxStep": 1
+"expected":
+  "want": 10

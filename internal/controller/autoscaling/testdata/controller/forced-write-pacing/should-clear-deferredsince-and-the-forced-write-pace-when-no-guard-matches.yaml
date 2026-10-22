@@ -1,0 +1,33 @@
+"name": "should-clear-deferredsince-and-the-forced-write-pace-when-no-guard-matches"
+"description": "should clear deferredSince and the forced-write pace when no guard matches"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+    "maxStepReplicas": 2
+  "metric": "0"
+  "deploy":
+    "replicas": 5
+    "updated": 5
+    "ready": 0
+    "available": 0
+    "spec": 5
+  "steps":
+  - "at": "0s"
+  - "at": "60s"
+  - "by": "letting the fleet become ready at the replica count just written"
+    "at": "60s"
+    "observeSpec": 3
+"expected":
+  "steps":
+  - {}
+  - "replicas": 3
+    "forcedWrite": true
+    "deferredSince": "0s"
+  - "replicas": 1
+    "deferredSince": null
+    "forcedWrite": false
+    "condition":
+      "status": "False"
+      "reason": "NotDeferred"
+      "messageContains":
+      - "scaled 3 -> 1"

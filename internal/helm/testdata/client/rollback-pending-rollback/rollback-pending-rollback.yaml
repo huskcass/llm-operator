@@ -1,0 +1,26 @@
+description: rollback of a pending rollback
+namespace: default
+seed:
+  - name: back
+    revision: 1
+    status: deployed
+    updated: "-2h"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: back
+  - name: back
+    revision: 2
+    status: pending-rollback
+    updated: "-30m"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: back
+steps:
+  - op: rollback
+    release: back
+    revision: 1
+  - op: get
+    release: back
+    expect:
+      revision: 3
+      status: deployed

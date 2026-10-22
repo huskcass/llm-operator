@@ -1,0 +1,64 @@
+"name": "should-keep-deferredsince-across-no-op-syncs-while-a-rollout-guard-still-matches"
+"description": "should keep deferredSince across no-op syncs while a rollout guard still matches"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+  "rollout": true
+  "steps":
+  - "by": "not starting a deferral on a no-op, even though the rollout guard matches"
+    "at": "0s"
+    "metric": "0.5"
+  - "by": "stamping deferredSince on the first sync that actually wants to write"
+    "at": "10s"
+    "metric": "0.85"
+  - "by": "alternating a no-op with a held scale-up; the no-ops must not move the clock"
+    "at": "20s"
+    "metric": "0.5"
+  - "at": "30s"
+    "metric": "0.85"
+  - "at": "40s"
+    "metric": "0.5"
+  - "by": "forcing the held scale-up once the original deadline passes"
+    "at": "70s"
+    "metric": "0.85"
+"expected":
+  "steps":
+  - "deferredSince": null
+    "replicas": 1
+    "condition":
+      "status": "False"
+      "reason": "NotDeferred"
+  - "deferredSince": "10s"
+    "replicas": 1
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+  - "replicas": 1
+    "deferredSince": "10s"
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+      "messageContains": &id001
+      - "nothing to write this sync"
+      - "guard is still active"
+      - "deferral clock keeps running"
+      - "2026-03-01T12:00:10Z"
+      - "Deployment rollout in progress"
+  - "replicas": 1
+    "deferredSince": "10s"
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+  - "replicas": 1
+    "deferredSince": "10s"
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+      "messageContains": *id001
+  - "replicas": 2
+    "deferredSince": "10s"
+    "condition":
+      "status": "False"
+      "reason": "DeferralTimedOut"
+      "messageContains":
+      - "scaling 1 -> 2 anyway"

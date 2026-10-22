@@ -1,0 +1,21 @@
+name: clamps-a-short-pending-wait-to-15s
+description: clamps a short pending wait to 15s
+pendingTimeout: "10s"
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 1
+      status: pending-rollback
+      updated: "-8s"
+  - action: reconcile
+    expect:
+      requeue:
+        exact: "15s"
+      rollbacks: 0
+      uninstalls: 0
+      conditions:
+        - type: Applied
+          reason: OperationInProgress

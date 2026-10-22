@@ -1,0 +1,6 @@
+"name": "should-reject-a-custom-scaler-with-no-customprovider"
+"description": "should reject a Custom scaler with no customProvider"
+"inputs":
+  "omitCustomProvider": true
+"expected":
+  "errorContains": "spec.customProvider is required"

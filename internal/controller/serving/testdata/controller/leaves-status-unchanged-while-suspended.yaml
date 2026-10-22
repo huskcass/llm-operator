@@ -1,0 +1,25 @@
+name: leaves-status-unchanged-while-suspended
+description: leaves status unchanged while suspended
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: capture
+    capture:
+      - appliedHash
+      - observedGeneration
+  - action: update
+    suspend: true
+    layers:
+      - name: site
+        values: '{"replicaCount":9}'
+  - action: reconcile
+    expect:
+      installs: 1
+      upgrades: 0
+      phase: Applied
+      appliedHash:
+        captured: true
+      helmRevision: 1
+      observedGeneration: captured

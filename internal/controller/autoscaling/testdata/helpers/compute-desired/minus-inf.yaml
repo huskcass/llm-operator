@@ -1,0 +1,9 @@
+"name": "minus-inf"
+"description": "-Inf"
+"inputs":
+  "sample": "-Inf"
+  "ready": 4
+  "metricName": "guardrail"
+  "query": "histogram_quantile(0.95, x)"
+  "target": "2"
+"expected": {}

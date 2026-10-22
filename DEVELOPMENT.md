@@ -137,6 +137,26 @@ The release workflow packages and publishes `dist/chart`.
 
 More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
+## File-based tests
+
+Unit and envtest cases live in YAML under a `testdata/` directory next to the package, one file per case. The Go tests load those files, stand up fixtures, and check the result. Kind-based end-to-end tests under `test/e2e` are unchanged.
+
+```
+internal/<pkg>/testdata/<suite>/<case-name>.yaml
+```
+
+The suite directory groups a table (`guards/hold`, `controller/metric-scaling`). The file name is the case name in kebab-case. A document has:
+
+- `name`, optional. When set it must equal the file name without `.yaml`.
+- `description`, the sentence `go test -v` and Ginkgo print. When it is empty, the file name is used.
+- `inputs` and `expected`, decoded into a Go struct. An unknown field, a duplicate key, or a value of the wrong type fails the load.
+
+Durations are Go duration strings (`30s`, `1m1s`, `-2h`). A nil pointer is an omitted field or `null`. A pointer to zero is `0` or `"0s"`, not an omission. Times relative to a fixed origin are offsets from that origin; the runner adds them.
+
+The loader is `internal/testutil/cases`. It reads every `*.yaml` under the directory, in path order, and rejects an empty directory. `cases.Run` starts one subtest per file. Ginkgo tables use `cases.Entries`, one entry per file.
+
+To add a case, copy a nearby file, change the inputs and the expected result, and run `make test`.
+
 ## License
 
 Copyright 2026.

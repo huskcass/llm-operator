@@ -1,0 +1,27 @@
+"name": "deployment-with-full-status"
+"description": "Deployment with full status"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 9
+    "spec":
+      "replicas": 4
+    "status":
+      "readyReplicas": 3
+      "replicas": 6
+      "updatedReplicas": 2
+      "terminatingReplicas": 1
+      "observedGeneration": 8
+"expected":
+  "spec": 4
+  "total": 6
+  "updated": 2
+  "ready": 3
+  "terminating": 1
+  "terminatingReported": true
+  "generation": 9
+  "observedGeneration": 8
+  "tracksRollout": true

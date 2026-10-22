@@ -1,0 +1,13 @@
+# ceil(1 * 0.85/0.5) = ceil(1.7) = 2. The mock sample is 0.85 and the target is 0.5.
+"name": "should-successfully-scale-the-deployment-based-on-metrics"
+"description": "should successfully scale the deployment based on metrics"
+"inputs":
+  "plainReconciler": true
+  "steps":
+  - "by": "running the Reconciler"
+  - "by": "checking if the Deployment replicas increased"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 2

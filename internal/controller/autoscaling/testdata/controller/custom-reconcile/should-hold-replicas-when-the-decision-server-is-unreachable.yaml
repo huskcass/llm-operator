@@ -1,0 +1,20 @@
+"name": "should-hold-replicas-when-the-decision-server-is-unreachable"
+"description": "should hold replicas when the decision server is unreachable"
+"inputs":
+  "deploy":
+    "replicas": 3
+    "updated": 3
+    "ready": 3
+    "available": 3
+    "spec": 3
+  "deployBy": "putting the Deployment at 3 replicas, above minReplicas"
+  "closeServer": true
+  "closeBy": "taking the decision server down"
+  "reconcileBy": "running the Reconciler"
+  "replicasBy": "checking the Deployment was left where it was, not collapsed to minReplicas"
+  "statusBy": "checking the failure is reported on the status"
+"expected":
+  "replicas": 3
+  "decisionStatus": "False"
+  "decisionReason": "DecisionUnavailable"
+  "decisionMessageNonEmpty": true

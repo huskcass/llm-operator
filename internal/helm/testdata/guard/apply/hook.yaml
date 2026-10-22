@@ -1,0 +1,14 @@
+description: hook install refused
+steps:
+  - write: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: escape
+        namespace: kube-system
+        annotations:
+          helm.sh/hook: pre-install,pre-upgrade
+  - op: install
+    errorContains: kube-system
+  - op: get
+    absent: true

@@ -1,0 +1,6 @@
+"name": "inf-parses-as-a-float-but-is-not-usable"
+"description": "Inf parses as a float but is not usable"
+"inputs":
+  "value": "+Inf"
+"expected":
+  "error": true

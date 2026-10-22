@@ -1,0 +1,9 @@
+"name": "pacing-sooner-than-sync-period"
+"description": "pacing sooner than sync period"
+"inputs":
+  "holding": true
+  "timeout": "1m"
+  "until": "-1s"
+  "pacing": "4s"
+"expected":
+  "after": "4s"

@@ -1,0 +1,8 @@
+"name": "the-namespace-filter-picks-between-same-named-services"
+"description": "the namespace filter picks between same-named services"
+"inputs":
+  "serviceId": "svc"
+  "namespace": "modelforge"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"staging\",\"serviceId\":\"svc\",\"replicas\":{\"active\":2}},{\"namespace\":\"modelforge\",\"serviceId\":\"svc\",\"replicas\":{\"active\":7}}]}"
+"expected":
+  "replicas": 7

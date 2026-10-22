@@ -1,0 +1,6 @@
+"name": "nan-parses-as-a-float-but-is-not-usable"
+"description": "NaN parses as a float but is not usable"
+"inputs":
+  "value": "NaN"
+"expected":
+  "error": true

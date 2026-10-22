@@ -1,0 +1,23 @@
+name: recovers-a-stale-owned-pending-install-and-installs
+description: recovers a stale owned pending-install and installs
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 1
+      status: pending-install
+      updated: "-1h"
+  - action: reconcile
+    expect:
+      uninstalls: 1
+      installs: 1
+      upgrades: 0
+      rollbacks: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Installed
+      releaseUID: self
+      eventContains: RecoveredPendingRelease

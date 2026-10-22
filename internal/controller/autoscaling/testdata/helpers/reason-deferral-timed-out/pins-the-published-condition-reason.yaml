@@ -1,0 +1,5 @@
+"name": "pins-the-published-condition-reason"
+"description": "pins the published condition reason"
+"inputs": {}
+"expected":
+  "reason": "DeferralTimedOut"

@@ -93,14 +93,6 @@ type sinceExpect struct {
 	offset time.Duration
 }
 
-func sinceAt(offset time.Duration) sinceExpect {
-	return sinceExpect{kind: sinceOffset, offset: offset}
-}
-
-func sinceNil() sinceExpect { return sinceExpect{kind: sinceNone} }
-
-func sinceSeed() sinceExpect { return sinceExpect{kind: sinceSeeded} }
-
 // scalerSpecPatch is applied to the fixture LLMScaler before the steps.
 // A nil field is left at the fixture value. DeferTimeoutSeconds is a pointer
 // on the API, so a pointer to 0 is "never force" and nil means "don't patch".

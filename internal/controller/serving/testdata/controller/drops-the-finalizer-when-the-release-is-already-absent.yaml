@@ -1,0 +1,16 @@
+name: drops-the-finalizer-when-the-release-is-already-absent
+description: drops the finalizer when the release is already absent
+steps:
+  - action: create
+    name: gone
+    version: "0.8.6"
+    finalizers:
+      - serving.modelsphere.dev/finalizer
+  - action: delete
+  - action: reconcile
+    expect:
+      gets: 1
+      installs: 0
+      upgrades: 0
+      uninstalls: 0
+      notFound: true

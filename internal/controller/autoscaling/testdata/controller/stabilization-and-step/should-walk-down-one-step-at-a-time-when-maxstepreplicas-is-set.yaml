@@ -1,0 +1,33 @@
+"name": "should-walk-down-one-step-at-a-time-when-maxstepreplicas-is-set"
+"description": "should walk down one step at a time when maxStepReplicas is set"
+"inputs":
+  "plainReconciler": true
+  "prelude": "capping the scale-down step at 2 replicas"
+  "spec":
+    "maxStepReplicas": 2
+  "steps":
+  - "by": "setting the Deployment to 5 replicas and the metric to 0 (idle)"
+    "skipReconcile": true
+    "metric": "0"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "spec": 5
+  - "by": "running the Reconciler; raw recommendation is minReplicas but the step is capped"
+  - "by": "checking status reports the uncapped recommendation, not the step"
+    "skipReconcile": true
+  - "by": "running the Reconciler again; it takes the next step down"
+    "deploy":
+      "replicas": 3
+      "updated": 3
+      "ready": 3
+      "available": 3
+      "spec": 3
+"expected":
+  "steps":
+  - {}
+  - "replicas": 3
+  - "desired": 1
+  - "replicas": 1

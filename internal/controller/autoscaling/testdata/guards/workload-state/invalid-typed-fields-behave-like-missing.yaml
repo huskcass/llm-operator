@@ -1,0 +1,20 @@
+"name": "invalid-typed-fields-behave-like-missing"
+"description": "invalid-typed fields behave like missing"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": "nope"
+    "spec":
+      "replicas": "nope"
+    "status":
+      "readyReplicas": "nope"
+      "replicas": "nope"
+      "updatedReplicas": "nope"
+      "terminatingReplicas": "nope"
+      "observedGeneration": "nope"
+"expected":
+  "spec": 1
+  "tracksRollout": true

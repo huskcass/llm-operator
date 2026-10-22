@@ -1,0 +1,8 @@
+"name": "deadline-due-this-instant"
+"description": "deadline due this instant"
+"inputs":
+  "holding": true
+  "timeout": "1m"
+  "until": "0s"
+"expected":
+  "after": "1s"

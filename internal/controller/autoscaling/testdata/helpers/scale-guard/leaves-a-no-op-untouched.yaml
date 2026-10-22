@@ -1,0 +1,8 @@
+"name": "leaves-a-no-op-untouched"
+"description": "leaves a no-op untouched"
+"inputs":
+  "current": 5
+  "desired": 5
+  "maxStep": 1
+"expected":
+  "want": 5

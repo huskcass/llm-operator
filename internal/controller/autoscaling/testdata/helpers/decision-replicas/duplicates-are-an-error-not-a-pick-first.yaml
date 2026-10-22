@@ -1,0 +1,7 @@
+"name": "duplicates-are-an-error-not-a-pick-first"
+"description": "duplicates are an error, not a pick-first"
+"inputs":
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"staging\",\"serviceId\":\"svc\",\"replicas\":{\"active\":2}},{\"namespace\":\"modelforge\",\"serviceId\":\"svc\",\"replicas\":{\"active\":7}}]}"
+"expected":
+  "errorContains": "2 decisions match"

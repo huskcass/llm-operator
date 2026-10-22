@@ -1,0 +1,8 @@
+"name": "passes-through-a-step-exactly-at-the-cap"
+"description": "passes through a step exactly at the cap"
+"inputs":
+  "current": 10
+  "desired": 8
+  "maxStep": 2
+"expected":
+  "want": 8

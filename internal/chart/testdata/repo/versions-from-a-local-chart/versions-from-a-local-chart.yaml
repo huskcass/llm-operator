@@ -1,0 +1,11 @@
+description: local Chart.yaml version, repo URL ignored
+calls:
+  - fn: versions
+    repoKind: local
+    localRepo: https://ignored.example.com
+    chart: sglang
+    chartYAML: |
+      name: sglang
+      version: 0.7.4
+    versions:
+      - "0.7.4"

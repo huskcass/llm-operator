@@ -1,0 +1,19 @@
+name: fails-when-the-chart-version-cannot-be-resolved
+description: fails when the chart version cannot be resolved
+steps:
+  - action: setVersions
+    listErr: registry down
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect:
+      error: true
+      phase: Failed
+      message:
+        contains:
+          - registry down
+      observedGeneration: current
+      conditions:
+        - type: Applied
+          reason: ChartResolveFailed
+      installs: 0

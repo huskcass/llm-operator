@@ -1,0 +1,17 @@
+"name": "settle-holds-once-the-rollout-is-done"
+"description": "settle holds once the rollout is done"
+"inputs":
+  "state":
+    "spec": 5
+    "total": 5
+    "updated": 5
+    "ready": 3
+    "generation": 3
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "reason": "ScaleDownSettling"
+  "message": "previous scale-down has not settled"

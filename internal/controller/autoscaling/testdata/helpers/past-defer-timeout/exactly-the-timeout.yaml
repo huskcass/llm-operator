@@ -1,0 +1,7 @@
+"name": "exactly-the-timeout"
+"description": "exactly the timeout"
+"inputs":
+  "timeout": "1m"
+  "elapsed": "1m"
+"expected":
+  "past": true

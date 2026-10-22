@@ -1,0 +1,26 @@
+# desired = ceil(2 * 0/0.5) = 0, clamped to minReplicas (0).
+"name": "should-scale-down-to-zero-when-minreplicas-is-0"
+"description": "should scale down to zero when minReplicas is 0"
+"inputs":
+  "plainReconciler": true
+  "prelude": "lowering the scaler's minReplicas to 0"
+  "spec":
+    "minReplicas": 0
+  "steps":
+  - "by": "setting the Deployment to 2 replicas, fully rolled out"
+    "skipReconcile": true
+    "metric": "0"
+    "deploy":
+      "replicas": 2
+      "updated": 2
+      "ready": 2
+      "available": 2
+      "spec": 2
+  - "by": "running the Reconciler"
+  - "by": "checking it scaled down to zero"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - {}
+  - "replicas": 0

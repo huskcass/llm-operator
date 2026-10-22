@@ -1,0 +1,23 @@
+# desired = ceil(5 * 0/0.5) = 0, clamped up to minReplicas (1).
+"name": "should-scale-down-to-minreplicas-when-the-metric-is-zero"
+"description": "should scale down to minReplicas when the metric is zero"
+"inputs":
+  "plainReconciler": true
+  "steps":
+  - "by": "setting the Deployment to 5 replicas and the metric to 0 (idle)"
+    "skipReconcile": true
+    "metric": "0"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "spec": 5
+  - "by": "running the Reconciler"
+  - "by": "checking it scaled down to minReplicas"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - {}
+  - "replicas": 1

@@ -1,0 +1,17 @@
+"name": "rollout-wins-over-an-unsettled-scale-down"
+"description": "rollout wins over an unsettled scale-down"
+"inputs":
+  "state":
+    "spec": 5
+    "total": 5
+    "updated": 5
+    "ready": 2
+    "generation": 4
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 3
+"expected":
+  "reason": "RolloutInProgress"
+  "message": "Deployment rollout in progress"

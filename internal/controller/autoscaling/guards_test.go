@@ -17,39 +17,68 @@ limitations under the License.
 package controller
 
 import (
+	"math"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
 )
 
-type guardHoldCase struct {
-	name             string
-	guard            string
-	state            WorkloadState
-	intent           ScaleIntent
-	checkTerminating bool
-	wantHeld         bool
-	wantReason       string
-	wantWhy          string
+// stateInput is the WorkloadState a guard case feeds Hold or evaluateGuards.
+// Zero fields are left at the Go zero, which is what an omitted YAML key means.
+type stateInput struct {
+	Spec                int32 `json:"spec"`
+	Total               int32 `json:"total"`
+	Updated             int32 `json:"updated"`
+	Ready               int32 `json:"ready"`
+	Terminating         int32 `json:"terminating"`
+	TerminatingReported bool  `json:"terminatingReported"`
+	Generation          int64 `json:"generation"`
+	ObservedGeneration  int64 `json:"observedGeneration"`
+	TracksRollout       bool  `json:"tracksRollout"`
+}
+
+func (s stateInput) state() WorkloadState { return WorkloadState(s) }
+
+type intentInput struct {
+	From int32 `json:"from"`
+	To   int32 `json:"to"`
+}
+
+func (in intentInput) intent() ScaleIntent { return ScaleIntent(in) }
+
+type guardHoldFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Guard            string      `json:"guard"`
+		State            stateInput  `json:"state"`
+		Intent           intentInput `json:"intent"`
+		CheckTerminating bool        `json:"checkTerminating"`
+	} `json:"inputs"`
+	Expected struct {
+		Held   bool   `json:"held"`
+		Reason string `json:"reason"`
+		Why    string `json:"why"`
+	} `json:"expected"`
 }
 
 func TestGuardHold(t *testing.T) {
-	for _, tc := range guardHoldCases {
-		t.Run(tc.name, func(t *testing.T) {
-			setTerminatingGate(t, tc.checkTerminating)
-			g, ok := guardByName(tc.guard)
-			if !ok {
-				t.Fatalf("unknown guard %q", tc.guard)
-			}
-			if g.Reason() != tc.wantReason {
-				t.Fatalf("Reason() = %q, want %q", g.Reason(), tc.wantReason)
-			}
-			held, why := g.Hold(tc.state, tc.intent)
-			if held != tc.wantHeld || why != tc.wantWhy {
-				t.Fatalf("Hold() = (%v, %q), want (%v, %q)", held, why, tc.wantHeld, tc.wantWhy)
-			}
-		})
-	}
+	cases.Run(t, "testdata/guards/hold", func(t *testing.T, tc guardHoldFile) {
+		setTerminatingGate(t, tc.Inputs.CheckTerminating)
+		g, ok := guardByName(tc.Inputs.Guard)
+		if !ok {
+			t.Fatalf("unknown guard %q", tc.Inputs.Guard)
+		}
+		if g.Reason() != tc.Expected.Reason {
+			t.Fatalf("Reason() = %q, want %q", g.Reason(), tc.Expected.Reason)
+		}
+		held, why := g.Hold(tc.Inputs.State.state(), tc.Inputs.Intent.intent())
+		if held != tc.Expected.Held || why != tc.Expected.Why {
+			t.Fatalf("Hold() = (%v, %q), want (%v, %q)", held, why, tc.Expected.Held, tc.Expected.Why)
+		}
+	})
 }
 
 func guardByName(name string) (Guard, bool) {
@@ -63,26 +92,29 @@ func guardByName(name string) (Guard, bool) {
 	}
 }
 
-type guardOrderCase struct {
-	name        string
-	state       WorkloadState
-	intent      ScaleIntent
-	wantReason  string
-	wantMessage string
+type guardOrderFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		State  stateInput  `json:"state"`
+		Intent intentInput `json:"intent"`
+	} `json:"inputs"`
+	Expected struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	} `json:"expected"`
 }
 
 // TestGuardOrder evaluates the guards slice. The flag is forced off so a
 // row does not depend on whichever case ran before it.
 func TestGuardOrder(t *testing.T) {
-	for _, tc := range guardOrderCases {
-		t.Run(tc.name, func(t *testing.T) {
-			setTerminatingGate(t, false)
-			got := evaluateGuards(tc.state, tc.intent)
-			if got.reason != tc.wantReason || got.message != tc.wantMessage {
-				t.Fatalf("got {%q %q}, want {%q %q}", got.reason, got.message, tc.wantReason, tc.wantMessage)
-			}
-		})
-	}
+	cases.Run(t, "testdata/guards/order", func(t *testing.T, tc guardOrderFile) {
+		setTerminatingGate(t, false)
+		got := evaluateGuards(tc.Inputs.State.state(), tc.Inputs.Intent.intent())
+		if got.reason != tc.Expected.Reason || got.message != tc.Expected.Message {
+			t.Fatalf("got {%q %q}, want {%q %q}", got.reason, got.message, tc.Expected.Reason, tc.Expected.Message)
+		}
+	})
 }
 
 func setTerminatingGate(t *testing.T, on bool) {
@@ -92,125 +124,99 @@ func setTerminatingGate(t *testing.T, on bool) {
 	t.Cleanup(func() { checkTerminatingReplicas = prev })
 }
 
-// workloadObjectFields is one target object as data. A nil field is omitted.
-// An int, int32, or int64 is stored as int64, which is what NestedInt64 reads.
-// Any other type, such as a string standing in for an invalid field, is stored
-// as itself.
-type workloadObjectFields struct {
-	spec        any
-	ready       any
-	total       any
-	updated     any
-	terminating any
-	generation  any
-	observed    any
-}
-
-type workloadStateCase struct {
-	name   string
-	kind   string
-	fields workloadObjectFields
-	want   WorkloadState
+type workloadStateFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Kind   string                     `json:"kind"`
+		Object *unstructured.Unstructured `json:"object"`
+	} `json:"inputs"`
+	Expected stateInput `json:"expected"`
 }
 
 func TestReadWorkloadState(t *testing.T) {
-	for _, tc := range workloadStateCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := readWorkloadState(workloadObject(t, tc.fields), tc.kind)
-			if got != tc.want {
-				t.Fatalf("got %+v, want %+v", got, tc.want)
-			}
-		})
-	}
-}
-
-func workloadObject(t *testing.T, f workloadObjectFields) *unstructured.Unstructured {
-	t.Helper()
-	obj := map[string]any{}
-	set := func(v any, fields ...string) {
-		t.Helper()
-		stored, ok := nestedJSONValue(v)
-		if !ok {
-			return
+	cases.Run(t, "testdata/guards/workload-state", func(t *testing.T, tc workloadStateFile) {
+		normalizeUnstructured(tc.Inputs.Object)
+		got := readWorkloadState(tc.Inputs.Object, tc.Inputs.Kind)
+		if got != tc.Expected.state() {
+			t.Fatalf("got %+v, want %+v", got, tc.Expected.state())
 		}
-		if err := unstructured.SetNestedField(obj, stored, fields...); err != nil {
-			t.Fatalf("set %v: %v", fields, err)
-		}
-	}
-	set(f.spec, "spec", "replicas")
-	set(f.ready, "status", "readyReplicas")
-	set(f.total, "status", "replicas")
-	set(f.updated, "status", "updatedReplicas")
-	set(f.terminating, "status", "terminatingReplicas")
-	set(f.generation, "metadata", "generation")
-	set(f.observed, "status", "observedGeneration")
-	return &unstructured.Unstructured{Object: obj}
+	})
 }
 
-// nestedJSONValue converts a case-table number to the int64 NestedInt64
-// accepts. nil means the field is omitted. A non-number is returned unchanged
-// so an invalid type can be written on purpose.
-func nestedJSONValue(v any) (any, bool) {
-	switch n := v.(type) {
-	case nil:
-		return nil, false
-	case int:
-		return int64(n), true
-	case int32:
-		return int64(n), true
-	case int64:
-		return n, true
-	default:
-		return v, true
-	}
+// targetGuardFile is one object-level guard result. The object is a
+// Deployment-shaped document; kind selects the parse. status.replicas stays
+// at 5 in every file. readyReplicas 0 is the raw count and is not settled.
+type targetGuardFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Kind   string                     `json:"kind"`
+		Object *unstructured.Unstructured `json:"object"`
+		Target int32                      `json:"target"`
+	} `json:"inputs"`
+	Expected struct {
+		Spec               int32  `json:"spec"`
+		Ready              int32  `json:"ready"`
+		Total              int32  `json:"total"`
+		Updated            int32  `json:"updated"`
+		Generation         int64  `json:"generation"`
+		ObservedGeneration int64  `json:"observedGeneration"`
+		Reason             string `json:"reason"`
+		Message            string `json:"message"`
+	} `json:"expected"`
 }
 
-// targetGuardCase is one object-level guard result: the fields build a
-// Deployment-shaped object, kind selects the parse.
-type targetGuardCase struct {
-	name        string
-	gen         int64
-	observed    int64
-	updated     int64
-	kind        string
-	spec        int64
-	ready       int64
-	target      int32
-	wantReason  string
-	wantMessage string
-}
-
-// deploymentObject builds the target a targetGuardCase describes.
-// status.replicas stays at 5; the cases vary generation, updatedReplicas,
-// spec.replicas, and readyReplicas.
-func deploymentObject(gen, observed, updated, spec, ready int64) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"generation": gen},
-		"spec":     map[string]any{"replicas": spec},
-		"status": map[string]any{
-			"observedGeneration": observed,
-			"updatedReplicas":    updated,
-			"replicas":           int64(5),
-			"readyReplicas":      ready,
-		},
-	}}
-}
-
-// TestGuardsOnTarget parses each row's object and evaluates the guards.
+// TestGuardsOnTarget parses each file's object and evaluates the guards.
 func TestGuardsOnTarget(t *testing.T) {
-	for _, tc := range targetGuardCases {
-		t.Run(tc.name, func(t *testing.T) {
-			state := readWorkloadState(deploymentObject(tc.gen, tc.observed, tc.updated, tc.spec, tc.ready), tc.kind)
-			if state.Spec != int32(tc.spec) || state.Ready != int32(tc.ready) {
-				t.Fatalf("parsed spec/ready = %d/%d, want %d/%d", state.Spec, state.Ready, tc.spec, tc.ready)
-			}
-			if state.Total != 5 || state.Updated != int32(tc.updated) || state.Generation != tc.gen || state.ObservedGeneration != tc.observed {
-				t.Fatalf("parsed rollout fields = total %d updated %d gen %d observed %d", state.Total, state.Updated, state.Generation, state.ObservedGeneration)
-			}
-			got := evaluateGuards(state, ScaleIntent{From: state.Spec, To: tc.target})
-			if got.reason != tc.wantReason || got.message != tc.wantMessage {
-				t.Fatalf("got {%q %q}, want {%q %q}", got.reason, got.message, tc.wantReason, tc.wantMessage)
-			}
-		})
+	cases.Run(t, "testdata/guards/target", func(t *testing.T, tc targetGuardFile) {
+		normalizeUnstructured(tc.Inputs.Object)
+		state := readWorkloadState(tc.Inputs.Object, tc.Inputs.Kind)
+		exp := tc.Expected
+		if state.Spec != exp.Spec || state.Ready != exp.Ready {
+			t.Fatalf("parsed spec/ready = %d/%d, want %d/%d", state.Spec, state.Ready, exp.Spec, exp.Ready)
+		}
+		if state.Total != exp.Total || state.Updated != exp.Updated ||
+			state.Generation != exp.Generation || state.ObservedGeneration != exp.ObservedGeneration {
+			t.Fatalf("parsed rollout fields = total %d updated %d gen %d observed %d",
+				state.Total, state.Updated, state.Generation, state.ObservedGeneration)
+		}
+		got := evaluateGuards(state, ScaleIntent{From: state.Spec, To: tc.Inputs.Target})
+		if got.reason != exp.Reason || got.message != exp.Message {
+			t.Fatalf("got {%q %q}, want {%q %q}", got.reason, got.message, exp.Reason, exp.Message)
+		}
+	})
+}
+
+// normalizeUnstructured turns whole-number float64 values into int64.
+// NestedInt64 only accepts int64. A string standing in for an invalid field
+// is left alone so it still reads as missing.
+func normalizeUnstructured(obj *unstructured.Unstructured) {
+	if obj == nil || obj.Object == nil {
+		return
+	}
+	obj.Object = normalizeJSON(obj.Object).(map[string]any)
+}
+
+func normalizeJSON(v any) any {
+	switch n := v.(type) {
+	case float64:
+		if !math.IsNaN(n) && !math.IsInf(n, 0) && n == math.Trunc(n) &&
+			n >= math.MinInt64 && n <= math.MaxInt64 {
+			return int64(n)
+		}
+		return n
+	case map[string]any:
+		for k, child := range n {
+			n[k] = normalizeJSON(child)
+		}
+		return n
+	case []any:
+		for i := range n {
+			n[i] = normalizeJSON(n[i])
+		}
+		return n
+	default:
+		return v
 	}
 }

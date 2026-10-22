@@ -1,0 +1,13 @@
+"name": "settle-scale-up-is-not-held"
+"description": "settle: scale-up is not held"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 2
+  "intent":
+    "from": 5
+    "to": 7
+"expected":
+  "held": false
+  "reason": "ScaleDownSettling"

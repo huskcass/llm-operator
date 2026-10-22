@@ -1,0 +1,42 @@
+name: waits-out-a-fresh-owned-pending-upgrade
+description: waits out a fresh owned pending-upgrade
+pendingTimeout: "2m"
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 2
+      status: pending-upgrade
+      updated: "0s"
+  - action: setHistory
+    entries:
+      - owned: true
+        revision: 1
+        status: deployed
+        updated: "-1h"
+      - slot: true
+  - action: reconcile
+    expect:
+      requeue:
+        atLeast: "15s"
+        above: "1m"
+        atMost: "2m"
+      installs: 0
+      upgrades: 0
+      uninstalls: 0
+      rollbacks: 0
+      phase: Applying
+      conditions:
+        - type: Applied
+          reason: OperationInProgress
+      message:
+        contains:
+          - pending-upgrade
+  - action: reconcile
+    expect:
+      requeue:
+        atLeast: "15s"
+      rollbacks: 0
+      upgrades: 0

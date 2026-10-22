@@ -1,0 +1,8 @@
+"name": "passes-through-a-step-within-the-cap"
+"description": "passes through a step within the cap"
+"inputs":
+  "current": 10
+  "desired": 9
+  "maxStep": 2
+"expected":
+  "want": 9

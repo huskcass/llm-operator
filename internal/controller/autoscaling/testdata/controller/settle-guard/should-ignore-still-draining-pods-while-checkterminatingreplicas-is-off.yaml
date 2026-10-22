@@ -1,0 +1,22 @@
+# readyReplicas excludes terminating pods, so the fleet reads as settled the moment the previous step's pods are marked for deletion.
+"name": "should-ignore-still-draining-pods-while-checkterminatingreplicas-is-off"
+"description": "should ignore still-draining pods while checkTerminatingReplicas is off"
+"inputs":
+  "plainReconciler": true
+  "checkTerminating": false
+  "metric": "0"
+  "steps":
+  - "by": "setting 5 ready with 2 still draining"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "spec": 5
+      "terminating": 2
+  - "by": "checking the scale-down was not held back by the drain"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 1

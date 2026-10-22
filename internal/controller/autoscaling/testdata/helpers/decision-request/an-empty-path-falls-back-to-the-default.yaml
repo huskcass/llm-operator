@@ -1,0 +1,12 @@
+"name": "an-empty-path-falls-back-to-the-default"
+"description": "an empty path falls back to the default"
+"inputs":
+  "serviceId": "fallback-modelforge-01"
+  "headers":
+    "Authorization": "Bearer t"
+"expected":
+  "replicas": 4
+  "path": "/decisions"
+  "serviceId": "fallback-modelforge-01"
+  "authorization": "Bearer t"
+  "pinDefaultPath": true

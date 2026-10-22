@@ -1,0 +1,6 @@
+# The fixture leaves the field unset; the CRD default fills it.
+"name": "should-default-defertimeoutseconds-to-600"
+"description": "should default deferTimeoutSeconds to 600"
+"inputs": {}
+"expected":
+  "seconds": 600

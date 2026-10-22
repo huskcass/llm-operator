@@ -1,0 +1,7 @@
+description: no namespace
+manifest: |
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: a
+refused: ""

@@ -1,0 +1,5 @@
+name: nil-allowlist
+description: no allowlist allows any repository
+nilAllowlist: true
+repo: https://anything.example.com/charts
+want: true

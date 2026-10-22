@@ -1,0 +1,8 @@
+"name": "caps-a-burst-scale-down"
+"description": "caps a burst scale-down"
+"inputs":
+  "current": 10
+  "desired": 1
+  "maxStep": 2
+"expected":
+  "want": 8

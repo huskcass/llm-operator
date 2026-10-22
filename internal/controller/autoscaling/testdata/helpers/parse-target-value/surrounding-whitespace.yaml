@@ -1,0 +1,6 @@
+"name": "surrounding-whitespace"
+"description": "surrounding whitespace"
+"inputs":
+  "value": "  2.5 "
+"expected":
+  "value": 2.5

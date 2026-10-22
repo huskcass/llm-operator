@@ -1,0 +1,15 @@
+# 8 ready replicas would turn a per-replica metric into a much larger number; a decision of 15 is already the answer.
+"name": "the-decision-is-used-as-is-not-scaled-by-readyreplicas"
+"description": "the decision is used as-is, not scaled by readyReplicas"
+"inputs":
+  "active": "15"
+  "minReplicas": 1
+  "maxReplicas": 20
+  "readyReplicas": 8
+  "specReplicas": 8
+  "serviceId": "svc"
+  "namespace": "modelforge"
+  "apiVersion": "llmscaling.inference.x-k8s.io/v1alpha1"
+  "pinAPIVersion": true
+"expected":
+  "replicas": 15

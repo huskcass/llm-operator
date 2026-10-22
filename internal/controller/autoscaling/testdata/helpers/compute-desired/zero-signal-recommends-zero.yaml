@@ -1,0 +1,14 @@
+# A zero signal still recommends 0.
+"name": "zero-signal-recommends-zero"
+"description": "zero signal recommends zero"
+"inputs":
+  "sample": "0"
+  "ready": 0
+  "minReplicas": 0
+  "maxReplicas": 5
+  "metricName": "queue"
+  "query": "sum(queue_depth)"
+  "target": "0.5"
+"expected":
+  "have": true
+  "desired": 0

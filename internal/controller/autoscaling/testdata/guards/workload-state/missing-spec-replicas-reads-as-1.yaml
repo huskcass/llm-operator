@@ -1,0 +1,25 @@
+"name": "missing-spec-replicas-reads-as-1"
+"description": "missing spec.replicas reads as 1"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 9
+    "status":
+      "readyReplicas": 3
+      "replicas": 6
+      "updatedReplicas": 2
+      "terminatingReplicas": 1
+      "observedGeneration": 8
+"expected":
+  "spec": 1
+  "total": 6
+  "updated": 2
+  "ready": 3
+  "terminating": 1
+  "terminatingReported": true
+  "generation": 9
+  "observedGeneration": 8
+  "tracksRollout": true

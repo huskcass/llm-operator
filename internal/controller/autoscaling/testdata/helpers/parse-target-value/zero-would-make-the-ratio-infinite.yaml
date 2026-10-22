@@ -1,0 +1,6 @@
+"name": "zero-would-make-the-ratio-infinite"
+"description": "zero would make the ratio infinite"
+"inputs":
+  "value": "0"
+"expected":
+  "error": true

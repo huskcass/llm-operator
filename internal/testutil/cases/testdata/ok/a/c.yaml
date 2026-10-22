@@ -1,0 +1,9 @@
+name: c
+description: first
+inputs:
+  value: 1
+  wait: "30s"
+  maybe: "1s"
+  empty: null
+expected:
+  value: 1

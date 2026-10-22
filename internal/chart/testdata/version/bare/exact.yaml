@@ -1,0 +1,7 @@
+description: a bare version allows only itself
+spec: "0.7.1"
+exact: "0.7.1"
+allows:
+  - "0.7.1"
+refuses:
+  - "0.7.2"

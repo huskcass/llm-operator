@@ -1,0 +1,8 @@
+"name": "should-reject-a-prometheus-scaler-with-no-metrics"
+"description": "should reject a Prometheus scaler with no metrics"
+"inputs":
+  "metricProvider": "Prometheus"
+  "omitCustomProvider": true
+  "pinProvider": true
+"expected":
+  "errorContains": "spec.metrics must be non-empty"

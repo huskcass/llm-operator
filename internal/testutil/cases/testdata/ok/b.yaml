@@ -1,0 +1,6 @@
+name: b
+description: second
+inputs:
+  value: 2
+expected:
+  value: 2

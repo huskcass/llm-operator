@@ -1,0 +1,38 @@
+description: pending install, a failed release, and absent history
+namespace: default
+seed:
+  - name: fresh
+    revision: 1
+    status: pending-install
+    updated: "-3h"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: fresh
+  - name: broke
+    revision: 1
+    status: failed
+    updated: "-1h"
+steps:
+  - op: history
+    release: fresh
+    history:
+      - status: pending-install
+        updated: "-3h"
+  - op: uninstall
+    release: fresh
+  - op: get
+    release: fresh
+    absent: true
+  - op: get
+    release: broke
+    expect:
+      status: failed
+      updated: "-1h"
+  - op: history
+    release: broke
+    history:
+      - revision: 1
+        status: failed
+  - op: history
+    release: absent
+    absent: true

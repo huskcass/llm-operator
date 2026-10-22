@@ -1,0 +1,24 @@
+"name": "settled-scale-down-may-proceed"
+"description": "settled scale-down may proceed"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 3
+    "spec":
+      "replicas": 5
+    "status":
+      "observedGeneration": 3
+      "updatedReplicas": 5
+      "replicas": 5
+      "readyReplicas": 5
+  "target": 4
+"expected":
+  "spec": 5
+  "ready": 5
+  "total": 5
+  "updated": 5
+  "generation": 3
+  "observedGeneration": 3

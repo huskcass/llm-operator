@@ -1,0 +1,4 @@
+description: exact needs no registry
+spec: "0.7.1"
+got: "0.7.1"
+noList: true

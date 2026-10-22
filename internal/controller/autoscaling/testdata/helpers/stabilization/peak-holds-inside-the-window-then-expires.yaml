@@ -1,0 +1,19 @@
+# First recommendation sticks, a dip inside the window holds the peak, the peak expires after the window, and a scale-up is immediate.
+"name": "peak-holds-inside-the-window-then-expires"
+"description": "peak holds inside the window then expires"
+"inputs":
+  "window": "60s"
+  "ops":
+  - "at": "0s"
+    "recommend": 5
+    "want": 5
+  - "at": "10s"
+    "recommend": 1
+    "want": 5
+  - "at": "61s"
+    "recommend": 1
+    "want": 1
+  - "at": "61s"
+    "recommend": 9
+    "want": 9
+"expected": {}

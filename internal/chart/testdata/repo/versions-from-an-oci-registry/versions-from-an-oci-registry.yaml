@@ -1,0 +1,32 @@
+description: bearer challenge, anonymous token, and paginated tags
+tls: true
+replaceClient: true
+routes:
+  - path: /token
+    requireQuery:
+      scope: "repository:org/charts/sglang:pull"
+    body: '{"token":"t"}'
+  - path: /v2/org/charts/sglang/tags/list
+    query:
+      last: ""
+    requireAuth: "Bearer t"
+    headers:
+      Link: '</v2/org/charts/sglang/tags/list?last=0.7.1&n=2>; rel="next"'
+    body: '{"tags":["0.7.0","0.7.1"]}'
+  - path: /v2/org/charts/sglang/tags/list
+    requireAuth: "Bearer t"
+    body: '{"tags":["0.8.0_build.1","sha256-abc.sig"]}'
+  - challenge: bearer
+    realmPath: /token
+    service: reg
+    scope: "repository:org/charts/sglang:pull"
+calls:
+  - fn: versions
+    repoKind: oci
+    repoPath: /org/charts
+    chart: sglang
+    versions:
+      - "0.7.0"
+      - "0.7.1"
+      - "0.8.0+build.1"
+      - sha256-abc.sig

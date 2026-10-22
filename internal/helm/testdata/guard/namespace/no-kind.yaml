@@ -1,0 +1,4 @@
+description: no kind
+manifest: |
+  replicaCount: 1
+refused: an object with no kind

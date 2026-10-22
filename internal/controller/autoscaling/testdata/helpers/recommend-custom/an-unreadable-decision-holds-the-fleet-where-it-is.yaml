@@ -1,0 +1,13 @@
+"name": "an-unreadable-decision-holds-the-fleet-where-it-is"
+"description": "an unreadable decision holds the fleet where it is"
+"inputs":
+  "active": "15"
+  "minReplicas": 1
+  "maxReplicas": 20
+  "readyReplicas": 8
+  "specReplicas": 8
+  "serviceId": "svc"
+  "namespace": "modelforge"
+  "apiVersion": "some.other.api/v1"
+"expected":
+  "replicas": 8

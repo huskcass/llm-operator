@@ -1,0 +1,8 @@
+"name": "deadline-under-the-1s-floor"
+"description": "deadline under the 1s floor"
+"inputs":
+  "holding": true
+  "timeout": "1m"
+  "until": "200ms"
+"expected":
+  "after": "1s"

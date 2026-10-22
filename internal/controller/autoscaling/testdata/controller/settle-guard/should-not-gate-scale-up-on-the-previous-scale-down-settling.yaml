@@ -1,0 +1,21 @@
+# ceil(2 * 0.85/0.5) = 4; the settle guard only gates scale-down.
+"name": "should-not-gate-scale-up-on-the-previous-scale-down-settling"
+"description": "should not gate scale-up on the previous scale-down settling"
+"inputs":
+  "plainReconciler": true
+  "steps":
+  - "by": "setting 3 replicas with 2 ready and 1 still terminating, under load"
+    "metric": "0.85"
+    "deploy":
+      "replicas": 3
+      "updated": 3
+      "ready": 2
+      "available": 2
+      "spec": 3
+      "terminating": 1
+  - "by": "checking capacity was added despite the unsettled fleet"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 4

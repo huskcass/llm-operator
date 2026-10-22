@@ -1,0 +1,52 @@
+# readyReplicas 0 is omitted from status and reads as missing. available is 0 too, because availableReplicas cannot exceed readyReplicas.
+"name": "should-force-a-scale-down-of-an-unready-fleet-once-the-deferral-times-out"
+"description": "should force a scale-down of an unready fleet once the deferral times out"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+    "maxStepReplicas": 2
+  "prelude": "capping the step and parking 5 replicas with none ready"
+  "deploy":
+    "replicas": 5
+    "updated": 5
+    "ready": 0
+    "available": 0
+    "spec": 5
+  "metric": "0"
+  "steps":
+  - "at": "0s"
+  - "by": "keeping the same deferral until the timeout"
+    "at": "59s"
+  - "by": "forcing the capped step, not the uncapped recommendation"
+    "at": "60s"
+"expected":
+  "steps":
+  - "replicas": 5
+    "deferredSince": "0s"
+    "desired": 1
+    "current": 0
+    "applied": 5
+    "condition":
+      "status": "True"
+      "reason": "ScaleDownSettling"
+      "messageContains":
+      - "holding 5 replicas (wanted 3)"
+      - "will apply after 60s"
+  - "replicas": 5
+    "deferredSince": "0s"
+  - "replicas": 3
+    "deferredSince": "0s"
+    "desired": 1
+    "applied": 3
+    "current": 0
+    "condition":
+      "status": "False"
+      "reason": "DeferralTimedOut"
+      "messageContains":
+      - "scaling 5 -> 3 anyway"
+    "events":
+    - "prefix": "Normal ScalingDeferred"
+    - "prefix": "Warning DeferralTimedOut"
+      "contains":
+      - "previous scale-down has not settled"
+      - "5 -> 3"

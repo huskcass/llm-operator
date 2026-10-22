@@ -1,0 +1,7 @@
+"name": "a-count-past-int32-is-refused-rather-than-wrapped"
+"description": "a count past int32 is refused rather than wrapped"
+"inputs":
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"serviceId\":\"svc\",\"replicas\":{\"active\":4294967296}}]}"
+"expected":
+  "errorContains": "out of range"

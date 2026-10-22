@@ -1,0 +1,7 @@
+name: https-modelsphere-github-io-helm-charts
+description: "https://modelsphere.github.io/helm-charts"
+allowed:
+  - oci://ghcr.io/modelsphere
+  - https://modelsphere.github.io/helm-charts/
+repo: "https://modelsphere.github.io/helm-charts"
+want: true

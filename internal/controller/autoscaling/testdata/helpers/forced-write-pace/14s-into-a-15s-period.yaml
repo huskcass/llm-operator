@@ -1,0 +1,9 @@
+"name": "14s-into-a-15s-period"
+"description": "14s into a 15s period"
+"inputs":
+  "recorded": true
+  "sync": "15s"
+  "at": "14s"
+"expected":
+  "allowed": false
+  "remaining": "1s"

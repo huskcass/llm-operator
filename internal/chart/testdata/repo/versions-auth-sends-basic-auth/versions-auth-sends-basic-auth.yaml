@@ -1,0 +1,50 @@
+description: index and oci send basic auth
+tls: true
+replaceClient: true
+username: user
+password: s3cret
+routes:
+  - path: /token
+    requireAuth: "{basic}"
+    captureAuth: token
+    body: '{"token":"t"}'
+  - path: /token
+    status: 401
+    body: "no basic\n"
+  - path: /v2/org/sglang/tags/list
+    requireAuth: "Bearer t"
+    body: '{"tags":["0.8.0"]}'
+  - path: /v2/org/sglang/tags/list
+    challenge: bearer
+    realmPath: /token
+    service: reg
+    scope: "repository:org/sglang:pull"
+  - path: /charts/index.yaml
+    requireAuth: "{basic}"
+    body: |
+      apiVersion: v1
+      entries:
+        sglang:
+          - version: 0.8.0
+  - path: /charts/index.yaml
+    status: 401
+    body: "no basic\n"
+calls:
+  - fn: versionsAuth
+    repoKind: https
+    repoPath: /charts
+    chart: sglang
+    username: user
+    password: s3cret
+    versions:
+      - "0.8.0"
+  - fn: versionsAuth
+    repoKind: oci
+    repoPath: /org
+    chart: sglang
+    username: user
+    password: s3cret
+    versions:
+      - "0.8.0"
+    capturedAuth: token
+    capturedEquals: "{basic}"

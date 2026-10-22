@@ -1,0 +1,5 @@
+description: comments only
+manifest: |
+  # Source: x/templates/empty.yaml
+  ---
+refused: ""

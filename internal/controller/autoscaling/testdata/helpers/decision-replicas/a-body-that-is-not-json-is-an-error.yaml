@@ -1,0 +1,7 @@
+"name": "a-body-that-is-not-json-is-an-error"
+"description": "a body that is not JSON is an error"
+"inputs":
+  "serviceId": "svc"
+  "body": "<html>502 Bad Gateway</html>"
+"expected":
+  "errorContains": "failed to decode"

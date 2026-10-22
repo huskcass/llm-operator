@@ -1,0 +1,18 @@
+"name": "missing-generation-observedgeneration-updated-and-total-read-as-0"
+"description": "missing generation, observedGeneration, updated, and total read as 0"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "spec":
+      "replicas": 4
+    "status":
+      "readyReplicas": 3
+      "terminatingReplicas": 1
+"expected":
+  "spec": 4
+  "ready": 3
+  "terminating": 1
+  "terminatingReported": true
+  "tracksRollout": true

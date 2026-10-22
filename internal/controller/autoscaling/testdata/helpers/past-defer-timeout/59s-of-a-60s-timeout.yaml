@@ -1,0 +1,7 @@
+"name": "59s-of-a-60s-timeout"
+"description": "59s of a 60s timeout"
+"inputs":
+  "timeout": "1m"
+  "elapsed": "59s"
+"expected":
+  "past": false

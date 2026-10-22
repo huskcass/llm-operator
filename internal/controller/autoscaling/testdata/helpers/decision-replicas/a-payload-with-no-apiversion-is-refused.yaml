@@ -1,0 +1,7 @@
+"name": "a-payload-with-no-apiversion-is-refused"
+"description": "a payload with no apiVersion is refused"
+"inputs":
+  "serviceId": "svc"
+  "body": "{\"decisions\":[{\"serviceId\":\"svc\",\"replicas\":{\"active\":3}}]}"
+"expected":
+  "errorContains": "unsupported decision schema"

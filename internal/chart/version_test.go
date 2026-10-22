@@ -6,13 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-)
 
-const (
-	v071      = "0.7.1"
-	v072      = "0.7.2"
-	v080      = "0.8.0"
-	tokenPath = "/token"
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
 )
 
 func spec(t *testing.T, s string) Spec {
@@ -24,79 +19,145 @@ func spec(t *testing.T, s string) Spec {
 	return sp
 }
 
-// A bare version is that version and nothing else, as before ranges.
+// bareCase is one exact-version check. Exact is a pointer so a range can
+// expect the empty string and an omitted field stays distinct from that.
+type bareCase struct {
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Spec        string   `json:"spec"`
+	Exact       *string  `json:"exact,omitempty"`
+	Allows      []string `json:"allows,omitempty"`
+	Refuses     []string `json:"refuses,omitempty"`
+}
+
 func TestABareVersionIsExact(t *testing.T) {
-	sp := spec(t, v071)
-	if sp.Exact() != v071 {
-		t.Errorf("Exact = %q, want 0.7.1", sp.Exact())
-	}
-	if sp.Allows(v072) || !sp.Allows(v071) {
-		t.Error("0.7.1 must allow 0.7.1 and only it")
-	}
-	if spec(t, ">=0.7.1").Exact() != "" {
-		t.Error("a range names no one version")
-	}
+	cases.Run(t, "testdata/version/bare", func(t *testing.T, tc bareCase) {
+		sp := spec(t, tc.Spec)
+		if tc.Exact == nil {
+			t.Fatal("exact is omitted; set it to the one version or to an empty string")
+		}
+		if sp.Exact() != *tc.Exact {
+			if *tc.Exact == "" {
+				t.Error("a range names no one version")
+			} else {
+				t.Errorf("Exact = %q, want %s", sp.Exact(), *tc.Exact)
+			}
+		}
+		bad := false
+		for _, v := range tc.Allows {
+			if !sp.Allows(v) {
+				bad = true
+			}
+		}
+		for _, v := range tc.Refuses {
+			if sp.Allows(v) {
+				bad = true
+			}
+		}
+		if bad {
+			t.Errorf("%s must allow %v and not %v", tc.Spec, tc.Allows, tc.Refuses)
+		}
+	})
+}
+
+type parseCase struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Spec        string `json:"spec"`
 }
 
 func TestParseSpecRefusesWhatIsNotAVersion(t *testing.T) {
-	for _, s := range []string{"", "latest", ">=banana"} {
-		if _, err := ParseSpec(s); err == nil {
-			t.Errorf("%q: want an error", s)
+	cases.Run(t, "testdata/version/parse", func(t *testing.T, tc parseCase) {
+		if _, err := ParseSpec(tc.Spec); err == nil {
+			t.Errorf("%q: want an error", tc.Spec)
 		}
-	}
+	})
+}
+
+type matchCase struct {
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Spec        string   `json:"spec"`
+	Have        []string `json:"have"`
+	Want        []string `json:"want"`
 }
 
 func TestMatchIsNewestFirstAndSkipsNonVersions(t *testing.T) {
-	got := spec(t, ">=0.7.1").Match([]string{"0.7.0", v071, "0.10.0", "latest", v080, "0.9.0-rc1", v080})
-	want := []string{"0.10.0", v080, v071}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %v, want %v -- newest first, no prerelease, no duplicates", got, want)
-	}
-	if got := spec(t, "^0.7.1").Match([]string{v071, "0.7.9", v080}); !reflect.DeepEqual(got, []string{"0.7.9", v071}) {
-		t.Errorf("^0.7.1 matched %v, want 0.7.x only", got)
-	}
+	cases.Run(t, "testdata/version/match", func(t *testing.T, tc matchCase) {
+		got := spec(t, tc.Spec).Match(tc.Have)
+		if !reflect.DeepEqual(got, tc.Want) {
+			t.Errorf("got %v, want %v -- %s", got, tc.Want, tc.Description)
+		}
+	})
 }
 
-func list(vs ...string) Lister {
+// resolveCase is one Resolve call.
+// Exactly one of noList, listNil, and list is set.
+// noList fails the test if the repository is read.
+// listNil passes a nil Lister.
+// list, including an empty array, is returned as the catalog.
+type resolveCase struct {
+	Name          string    `json:"name,omitempty"`
+	Description   string    `json:"description,omitempty"`
+	Spec          string    `json:"spec"`
+	Want          string    `json:"want,omitempty"`
+	Keep          string    `json:"keep,omitempty"`
+	Got           string    `json:"got,omitempty"`
+	NoList        bool      `json:"noList,omitempty"`
+	ListNil       bool      `json:"listNil,omitempty"`
+	List          *[]string `json:"list,omitempty"`
+	ErrorContains string    `json:"errorContains,omitempty"`
+}
+
+func (tc resolveCase) lister(t *testing.T) Lister {
+	t.Helper()
+	n := 0
+	if tc.NoList {
+		n++
+	}
+	if tc.ListNil {
+		n++
+	}
+	if tc.List != nil {
+		n++
+	}
+	if n != 1 {
+		t.Fatal("set exactly one of noList, listNil, and list")
+	}
+	if tc.NoList {
+		return func(context.Context) ([]string, error) {
+			t.Error("the repository must not be read")
+			return nil, errors.New("read")
+		}
+	}
+	if tc.ListNil {
+		return nil
+	}
+	vs := *tc.List
 	return func(context.Context) ([]string, error) { return vs, nil }
 }
 
-func noList(t *testing.T) Lister {
-	return func(context.Context) ([]string, error) {
-		t.Error("the repository must not be read")
-		return nil, errors.New("read")
+func runResolve(t *testing.T, tc resolveCase) {
+	t.Helper()
+	if tc.ErrorContains == "" && tc.Got == "" {
+		t.Fatal("set got or errorContains")
+	}
+	got, err := Resolve(t.Context(), spec(t, tc.Spec), tc.Want, tc.Keep, tc.lister(t))
+	if tc.ErrorContains != "" {
+		if err == nil || !strings.Contains(err.Error(), tc.ErrorContains) {
+			t.Errorf("%s: got %q, %v; want an error with %q", tc.Description, got, err, tc.ErrorContains)
+		}
+		return
+	}
+	if err != nil || got != tc.Got {
+		t.Errorf("%s: got %q, %v; want %q", tc.Description, got, err, tc.Got)
 	}
 }
 
 func TestResolve(t *testing.T) {
-	ctx := t.Context()
-	for _, tc := range []struct {
-		name, spec, want, keep, got string
-		list                        Lister
-	}{
-		{name: "named, in range", spec: ">=0.7.1", want: "0.7.3", got: "0.7.3", list: noList(t)},
-		{name: "exact needs no registry", spec: v071, got: v071, list: noList(t)},
-		{name: "exact moves a running one off", spec: v072, keep: v071, got: v072, list: noList(t)},
-		{name: "running one kept while in range", spec: ">=0.7.1", keep: v072, got: v072, list: noList(t)},
-		{name: "running one out of range", spec: ">=0.8.0", keep: v072, got: "0.9.0", list: list(v072, v080, "0.9.0")},
-		{name: "newest in range", spec: ">=0.7.1 <0.9.0", got: "0.8.1", list: list(v071, "0.8.1", "0.9.0")},
-	} {
-		got, err := Resolve(ctx, spec(t, tc.spec), tc.want, tc.keep, tc.list)
-		if err != nil || got != tc.got {
-			t.Errorf("%s: got %q, %v; want %q", tc.name, got, err, tc.got)
-		}
-	}
+	cases.Run(t, "testdata/version/resolve", runResolve)
 }
 
 func TestResolveRefuses(t *testing.T) {
-	ctx := t.Context()
-	if _, err := Resolve(ctx, spec(t, ">=0.7.1"), "0.6.0", "", noList(t)); err == nil || !strings.Contains(err.Error(), "not in the catalog's") {
-		t.Errorf("a named version out of range: %v", err)
-	}
-	if _, err := Resolve(ctx, spec(t, ">=0.7.1"), "", "", list("0.6.0")); err == nil || !strings.Contains(err.Error(), "no chart version satisfies") {
-		t.Errorf("nothing in range: %v", err)
-	}
-	if _, err := Resolve(ctx, spec(t, ">=0.7.1"), "", "", nil); err == nil || !strings.Contains(err.Error(), "Name a chart version") {
-		t.Errorf("a range with nowhere to list: %v", err)
-	}
+	cases.Run(t, "testdata/version/resolve-refuses", runResolve)
 }

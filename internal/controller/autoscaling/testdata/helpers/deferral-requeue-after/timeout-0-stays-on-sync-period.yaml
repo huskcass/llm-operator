@@ -1,0 +1,8 @@
+"name": "timeout-0-stays-on-sync-period"
+"description": "timeout 0 stays on sync period"
+"inputs":
+  "holding": true
+  "timeout": "0s"
+  "until": "5s"
+"expected":
+  "after": "15s"

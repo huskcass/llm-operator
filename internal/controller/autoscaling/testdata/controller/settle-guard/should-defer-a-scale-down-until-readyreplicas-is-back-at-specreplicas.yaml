@@ -1,0 +1,29 @@
+"name": "should-defer-a-scale-down-until-readyreplicas-is-back-at-specreplicas"
+"description": "should defer a scale-down until readyReplicas is back at specReplicas"
+"inputs":
+  "plainReconciler": true
+  "metric": "0"
+  "steps":
+  - "by": "setting the Deployment to 5 replicas with only 3 ready"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 3
+      "available": 3
+      "spec": 5
+  - "by": "checking the scale-down was deferred"
+    "skipReconcile": true
+  - "by": "letting the fleet converge"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+  - "by": "checking the scale-down now proceeds"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 5
+  - {}
+  - "replicas": 1

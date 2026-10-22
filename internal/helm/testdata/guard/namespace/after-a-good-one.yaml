@@ -1,0 +1,12 @@
+description: after a good one
+manifest: |
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: a
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata:
+    name: b
+refused: cluster-scoped

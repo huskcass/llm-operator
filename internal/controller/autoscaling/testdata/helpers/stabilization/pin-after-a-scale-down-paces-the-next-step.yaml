@@ -1,0 +1,32 @@
+# Pinning the written count after a scale-down paces the next one a full window later.
+"name": "pin-after-a-scale-down-paces-the-next-step"
+"description": "pin after a scale-down paces the next step"
+"inputs":
+  "window": "300s"
+  "ops":
+  - "at": "0s"
+    "recommend": 8
+    "want": 8
+  - "at": "301s"
+    "recommend": 1
+    "want": 1
+  - "at": "301s"
+    "holdAt": 6
+  - "at": "311s"
+    "recommend": 1
+    "want": 6
+  - "at": "400s"
+    "recommend": 1
+    "want": 6
+  - "at": "600s"
+    "recommend": 1
+    "want": 6
+  - "at": "602s"
+    "recommend": 1
+    "want": 1
+  - "at": "700s"
+    "holdAt": 6
+  - "at": "710s"
+    "recommend": 9
+    "want": 9
+"expected": {}

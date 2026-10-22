@@ -1,0 +1,26 @@
+"name": "missing-readyreplicas-reads-as-0"
+"description": "missing readyReplicas reads as 0"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 9
+    "spec":
+      "replicas": 4
+    "status":
+      "replicas": 6
+      "updatedReplicas": 2
+      "terminatingReplicas": 1
+      "observedGeneration": 8
+"expected":
+  "spec": 4
+  "total": 6
+  "updated": 2
+  "ready": 0
+  "terminating": 1
+  "terminatingReported": true
+  "generation": 9
+  "observedGeneration": 8
+  "tracksRollout": true

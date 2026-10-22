@@ -1,0 +1,8 @@
+"name": "a-non-ok-reply-is-an-error-even-when-the-body-is-a-decision"
+"description": "a non-OK reply is an error even when the body is a decision"
+"inputs":
+  "serviceId": "svc"
+  "status": 503
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"serviceId\":\"svc\",\"replicas\":{\"active\":3}}]}"
+"expected":
+  "errorContains": "status 503"

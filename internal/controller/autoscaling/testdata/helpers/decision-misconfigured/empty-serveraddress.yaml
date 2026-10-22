@@ -1,0 +1,7 @@
+"name": "empty-serveraddress"
+"description": "empty serverAddress"
+"inputs":
+  "serverAddress": ""
+  "serviceId": "svc"
+"expected":
+  "errorContains": "serverAddress"

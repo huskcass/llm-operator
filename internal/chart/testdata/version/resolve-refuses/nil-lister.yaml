@@ -1,0 +1,4 @@
+description: a range with nowhere to list
+spec: ">=0.7.1"
+listNil: true
+errorContains: "Name a chart version"

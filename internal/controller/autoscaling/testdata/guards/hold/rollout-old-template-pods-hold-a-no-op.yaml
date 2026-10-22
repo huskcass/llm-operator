@@ -1,0 +1,19 @@
+"name": "rollout-old-template-pods-hold-a-no-op"
+"description": "rollout: old-template pods hold a no-op"
+"inputs":
+  "guard": "rollout"
+  "state":
+    "spec": 5
+    "total": 6
+    "updated": 5
+    "ready": 5
+    "generation": 3
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 5
+"expected":
+  "held": true
+  "reason": "RolloutInProgress"
+  "why": "Deployment rollout in progress"

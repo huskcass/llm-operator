@@ -1,0 +1,14 @@
+# ceil(1 * 0.85/0.5) = 2, not ceil(0 * 0.85/0.5) = 0.
+"name": "positive-signal-wakes-the-fleet"
+"description": "positive signal wakes the fleet"
+"inputs":
+  "sample": "0.85"
+  "ready": 0
+  "minReplicas": 0
+  "maxReplicas": 5
+  "metricName": "queue"
+  "query": "sum(queue_depth)"
+  "target": "0.5"
+"expected":
+  "have": true
+  "desired": 2

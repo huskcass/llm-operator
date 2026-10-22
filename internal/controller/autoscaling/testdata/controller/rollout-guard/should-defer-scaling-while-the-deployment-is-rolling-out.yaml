@@ -1,0 +1,17 @@
+# The metric would compute desired=2, but the rollout guard defers scaling, so replicas stay at 1.
+"name": "should-defer-scaling-while-the-deployment-is-rolling-out"
+"description": "should defer scaling while the Deployment is rolling out"
+"inputs":
+  "plainReconciler": true
+  "steps":
+  - "by": "marking the Deployment as mid-rollout"
+    "rollout": true
+    "skipReconcile": true
+  - "by": "running the Reconciler"
+  - "by": "checking the Deployment was NOT scaled"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - {}
+  - "replicas": 1

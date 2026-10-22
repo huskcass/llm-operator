@@ -1,0 +1,26 @@
+name: keeps-observedgeneration-while-install-is-in-progress
+description: keeps observedGeneration while install is in progress
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: capture
+    capture:
+      - observedGeneration
+    expect:
+      observedGeneration: nonzero
+  - action: deleteRelease
+  - action: update
+    layers:
+      - name: site
+        values: '{"replicaCount":4}'
+  - action: reconcileHeld
+    expect:
+      mid:
+        phase: Applying
+        observedGeneration: captured
+      installs: 2
+      upgrades: 0
+      phase: Applied
+      observedGeneration: current

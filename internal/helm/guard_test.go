@@ -6,73 +6,111 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
 )
 
-const clusterScoped = "cluster-scoped"
-
-func TestNamespaceGuard(t *testing.T) {
-	g := namespaceGuard{namespace: "models", mapper: testMapper()}
-	for name, tc := range map[string]struct {
-		manifest, refused string
-	}{
-		"own namespace":     {"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n  namespace: models\n", ""},
-		"no namespace":      {"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n", ""},
-		"comments only":     {"# Source: x/templates/empty.yaml\n---\n", ""},
-		"another namespace": {"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n  namespace: kube-system\n", "into namespace kube-system"},
-		clusterScoped:       {"apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: a\n", "ClusterRole \"a\", which is cluster-scoped"},
-		"namespace object":  {"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: a\n", clusterScoped},
-		"inside a list": {"apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n  metadata:\n    name: a\n" +
-			"- apiVersion: rbac.authorization.k8s.io/v1\n  kind: Role\n  metadata:\n    name: b\n    namespace: kube-system\n", "Role \"b\" into namespace kube-system"},
-		"after a good one": {"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: b\n", clusterScoped},
-		"unknown kind":     {"apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: a\n", "cannot be told"},
-		"no kind":          {"replicaCount: 1\n", "an object with no kind"},
-	} {
-		out, err := g.Run(bytes.NewBufferString(tc.manifest))
-		switch {
-		case tc.refused == "" && err != nil:
-			t.Errorf("%s: refused: %v", name, err)
-		case tc.refused == "" && out.String() != tc.manifest:
-			t.Errorf("%s: manifests changed:\n%s", name, out)
-		case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)):
-			t.Errorf("%s: got %v, want an error with %q", name, err, tc.refused)
-		}
-	}
+// namespaceCase is one post-render. An empty refused string means the
+// manifest is returned unchanged and must equal the input bytes.
+type namespaceCase struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Manifest    string `json:"manifest"`
+	Refused     string `json:"refused,omitempty"`
 }
 
-// Install and Upgrade run the guard, hooks included, and store nothing a
-// refused chart rendered.
-func TestApplyRefusesAnotherNamespace(t *testing.T) {
-	for name, tpl := range map[string]string{
-		"template": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: escape\n  namespace: kube-system\n",
-		"hook": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: escape\n  namespace: kube-system\n" +
-			"  annotations:\n    helm.sh/hook: pre-install,pre-upgrade\n",
-	} {
-		dir := writeTinyChart(t)
-		if err := os.WriteFile(filepath.Join(dir, "templates", "escape.yaml"), []byte(tpl), 0o644); err != nil {
-			t.Fatal(err)
+func TestNamespaceGuard(t *testing.T) {
+	cases.Run(t, "testdata/guard/namespace", func(t *testing.T, tc namespaceCase) {
+		g := namespaceGuard{namespace: "models", mapper: testMapper()}
+		out, err := g.Run(bytes.NewBufferString(tc.Manifest))
+		if tc.Refused == "" {
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if out == nil || out.String() != tc.Manifest {
+				got := ""
+				if out != nil {
+					got = out.String()
+				}
+				t.Fatalf("manifests changed:\ngot %q\nwant %q", got, tc.Manifest)
+			}
+			return
 		}
-		c, _ := testClient(t, dir)
-		ref := ChartRef{Repo: testRepo, Name: tinyChartName, Version: tinyVersion}
-		if _, err := c.Install(t.Context(), testNamespace, tinyChartName, ref, nil, ApplyOpts{}); err == nil || !strings.Contains(err.Error(), "kube-system") {
-			t.Errorf("%s: install: got %v, want a refusal", name, err)
+		if err == nil || !strings.Contains(err.Error(), tc.Refused) {
+			t.Fatalf("got %v, want an error with %q", err, tc.Refused)
 		}
-		if got, err := c.Get(t.Context(), testNamespace, tinyChartName); err != nil || got != nil {
-			t.Errorf("%s: a refused install stored %#v, %v", name, got, err)
-		}
-	}
+	})
+}
 
-	// A chart that changes to write elsewhere is refused on upgrade.
+// applyCase is one install or upgrade sequence on a fresh client.
+// The refused template and hook installs do not share the later upgrade.
+type applyCase struct {
+	Name        string      `json:"name,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Steps       []applyStep `json:"steps"`
+}
+
+type applyStep struct {
+	Write         string `json:"write,omitempty"`
+	Op            string `json:"op,omitempty"`
+	ErrorContains string `json:"errorContains,omitempty"`
+	Absent        bool   `json:"absent,omitempty"`
+}
+
+func TestApplyRefusesAnotherNamespace(t *testing.T) {
+	cases.Run(t, "testdata/guard/apply", runApplyCase)
+}
+
+func runApplyCase(t *testing.T, tc applyCase) {
+	t.Helper()
 	dir := writeTinyChart(t)
 	c, _ := testClient(t, dir)
 	ref := ChartRef{Repo: testRepo, Name: tinyChartName, Version: tinyVersion}
-	if _, err := c.Install(t.Context(), testNamespace, tinyChartName, ref, nil, ApplyOpts{}); err != nil {
-		t.Fatal(err)
-	}
-	cluster := "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: escape\n"
-	if err := os.WriteFile(filepath.Join(dir, "templates", "escape.yaml"), []byte(cluster), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Upgrade(t.Context(), testNamespace, tinyChartName, ref, nil, ApplyOpts{}); err == nil || !strings.Contains(err.Error(), clusterScoped) {
-		t.Errorf("upgrade: got %v, want a refusal", err)
+	ctx := t.Context()
+	for _, step := range tc.Steps {
+		if step.Write != "" {
+			err := os.WriteFile(filepath.Join(dir, "templates", "escape.yaml"), []byte(step.Write), 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		switch step.Op {
+		case "":
+			if step.Write == "" {
+				t.Fatal("step has no write and no op")
+			}
+		case "install":
+			_, err := c.Install(ctx, testNamespace, tinyChartName, ref, nil, ApplyOpts{})
+			if step.ErrorContains == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), step.ErrorContains) {
+				t.Errorf("install: got %v, want a refusal", err)
+			}
+		case "upgrade":
+			_, err := c.Upgrade(ctx, testNamespace, tinyChartName, ref, nil, ApplyOpts{})
+			if step.ErrorContains == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), step.ErrorContains) {
+				t.Errorf("upgrade: got %v, want a refusal", err)
+			}
+		case "get":
+			got, err := c.Get(ctx, testNamespace, tinyChartName)
+			if !step.Absent {
+				t.Fatal("get step expects absent")
+			}
+			if err != nil || got != nil {
+				t.Errorf("a refused install stored %#v, %v", got, err)
+			}
+		default:
+			t.Fatalf("op %q", step.Op)
+		}
 	}
 }

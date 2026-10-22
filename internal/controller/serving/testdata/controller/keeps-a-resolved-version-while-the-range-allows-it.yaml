@@ -1,0 +1,25 @@
+name: keeps-a-resolved-version-while-the-range-allows-it
+description: keeps a resolved version while the range allows it
+steps:
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect:
+      chartVersion: "0.8.6"
+      listCalls: 1
+  - action: setVersions
+    versions:
+      - "0.8.6"
+      - "0.9.0"
+  - action: reconcile
+    expect:
+      chartVersion: "0.8.6"
+      listCalls: 1
+      upgrades: 0
+  - action: update
+    chartVersion: ">=0.9.0"
+  - action: reconcile
+    expect:
+      chartVersion: "0.9.0"
+      listCalls: 2
+      upgrades: 1

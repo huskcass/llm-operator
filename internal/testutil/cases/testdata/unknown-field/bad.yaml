@@ -1,0 +1,7 @@
+name: bad
+description: unknown field
+inputs:
+  value: 1
+expected:
+  value: 1
+  extra: true

@@ -1,0 +1,6 @@
+"name": "negative-would-invert-scaling"
+"description": "negative would invert scaling"
+"inputs":
+  "value": "-1"
+"expected":
+  "error": true

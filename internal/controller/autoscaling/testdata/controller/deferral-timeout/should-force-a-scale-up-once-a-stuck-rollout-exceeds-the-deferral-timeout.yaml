@@ -1,0 +1,55 @@
+"name": "should-force-a-scale-up-once-a-stuck-rollout-exceeds-the-deferral-timeout"
+"description": "should force a scale-up once a stuck rollout exceeds the deferral timeout"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+  "rollout": true
+  "steps":
+  - "by": "deferring the first sync and stamping deferredSince"
+    "at": "0s"
+  - "by": "reconciling again before the timeout, without restamping or rewriting"
+    "at": "59s"
+  - "by": "advancing past the timeout and forcing the held scale-up"
+    "at": "60s"
+"expected":
+  "steps":
+  - "requeueAfter": "15s"
+    "replicas": 1
+    "deferredSince": "0s"
+    "desired": 2
+    "applied": 1
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+      "messageContains":
+      - "holding 1 replicas (wanted 2)"
+      - "Deployment rollout in progress"
+      - "2026-03-01T12:00:00Z"
+      - "will apply after 60s"
+      "observedGenerationCurrent": true
+    "events":
+    - "prefix": "Normal ScalingDeferred"
+      "contains":
+      - "holding 1 replicas (wanted 2)"
+  - "requeueAfter": "1s"
+    "replicas": 1
+    "deferredSince": "0s"
+    "applied": 1
+    "noMoreEvents": true
+  - "replicas": 2
+    "deferredSince": "0s"
+    "desired": 2
+    "applied": 2
+    "requeueAfter": "15s"
+    "condition":
+      "status": "False"
+      "reason": "DeferralTimedOut"
+      "messageContains":
+      - "scaling 1 -> 2 anyway"
+      "observedGenerationCurrent": true
+    "events":
+    - "prefix": "Warning DeferralTimedOut"
+      "contains":
+      - "Deployment rollout in progress"
+      - "1 -> 2"
+    "noMoreEvents": true

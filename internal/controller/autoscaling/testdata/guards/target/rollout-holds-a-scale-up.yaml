@@ -1,0 +1,26 @@
+"name": "rollout-holds-a-scale-up"
+"description": "rollout holds a scale-up"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 4
+    "spec":
+      "replicas": 5
+    "status":
+      "observedGeneration": 3
+      "updatedReplicas": 5
+      "replicas": 5
+      "readyReplicas": 5
+  "target": 7
+"expected":
+  "spec": 5
+  "ready": 5
+  "total": 5
+  "updated": 5
+  "generation": 4
+  "observedGeneration": 3
+  "reason": "RolloutInProgress"
+  "message": "Deployment rollout in progress"

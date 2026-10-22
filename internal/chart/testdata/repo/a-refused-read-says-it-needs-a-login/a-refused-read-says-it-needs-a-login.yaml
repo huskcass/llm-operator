@@ -1,0 +1,23 @@
+description: refused read needs a login and does not name the token path
+tls: true
+replaceClient: true
+routes:
+  - path: /token
+    status: 403
+    body: '{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}'
+  - challenge: bearer
+    realmPath: /token
+    service: reg
+    scope: "repository:org/charts/sglang:pull"
+calls:
+  - fn: versions
+    repoKind: oci
+    repoPath: /org/charts
+    chart: sglang
+    needsLogin: true
+    errorContains:
+      - "{repo}/sglang"
+      - "needs a login"
+      - "DENIED: requested access to the resource is denied"
+    errorNotContains:
+      - /token

@@ -1,0 +1,8 @@
+"name": "unlimited-when-maxstep-is-0"
+"description": "unlimited when maxStep is 0"
+"inputs":
+  "current": 10
+  "desired": 1
+  "maxStep": 0
+"expected":
+  "want": 1

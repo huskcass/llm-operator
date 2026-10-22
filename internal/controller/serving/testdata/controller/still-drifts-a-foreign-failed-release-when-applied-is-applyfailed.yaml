@@ -1,0 +1,33 @@
+name: still-drifts-a-foreign-failed-release-when-applied-is-applyfailed
+description: still drifts a foreign failed release when Applied is ApplyFailed
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: setStatus
+    status:
+      phase: Failed
+      conditions:
+        - type: Applied
+          status: "False"
+          reason: ApplyFailed
+          message: boom
+          observedGeneration: current
+  - action: putRelease
+    release:
+      revision: 1
+      status: failed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      config:
+        replicaCount: 1
+  - action: reconcile
+    expect:
+      installs: 0
+      upgrades: 0
+      uninstalls: 0
+      phase: Failed
+      conditions:
+        - type: Adopted
+          reason: Drift
+        - type: Applied
+          reason: Drift

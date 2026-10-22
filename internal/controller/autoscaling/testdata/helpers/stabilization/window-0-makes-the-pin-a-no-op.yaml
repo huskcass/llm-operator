@@ -1,0 +1,12 @@
+# With stabilization off there is nothing to pace with, so the pin is a no-op.
+"name": "window-0-makes-the-pin-a-no-op"
+"description": "window 0 makes the pin a no-op"
+"inputs":
+  "window": "0s"
+  "ops":
+  - "at": "0s"
+    "holdAt": 6
+  - "at": "0s"
+    "recommend": 1
+    "want": 1
+"expected": {}

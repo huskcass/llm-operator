@@ -1,0 +1,20 @@
+name: records-a-helm-failure
+description: records a helm failure
+steps:
+  - action: setHelm
+    installErr: boom
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect:
+      errorContains: boom
+      phase: Failed
+      message:
+        contains:
+          - boom
+      observedGeneration: current
+      conditions:
+        - type: Applied
+          reason: ApplyFailed
+          status: "False"
+      releaseUID: self

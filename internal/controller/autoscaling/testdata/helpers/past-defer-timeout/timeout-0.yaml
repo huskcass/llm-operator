@@ -1,0 +1,7 @@
+"name": "timeout-0"
+"description": "timeout 0"
+"inputs":
+  "timeout": "0s"
+  "elapsed": "24h"
+"expected":
+  "past": false
