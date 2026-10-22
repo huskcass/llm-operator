@@ -1,0 +1,4 @@
+name: delete
+description: delete reconciles
+op: delete
+want: true

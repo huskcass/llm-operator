@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/autoscaling/v1alpha1"
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
 )
 
 // pastDeferBase is the deferredSince instant for TestPastDeferTimeout.
@@ -47,288 +48,369 @@ var stabilizationKey = types.NamespacedName{Namespace: "ns", Name: "s"}
 // deferralRequeueSync is the sync period passed to every deferralRequeueAfter row.
 const deferralRequeueSync = 15 * time.Second
 
-type deferTimeoutCase struct {
-	name         string
-	deferTimeout *int32
-	want         time.Duration
+type deferTimeoutFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		DeferTimeoutSeconds *int32 `json:"deferTimeoutSeconds"`
+	} `json:"inputs"`
+	Expected struct {
+		Duration      cases.Duration `json:"duration"`
+		EqualsDefault bool           `json:"equalsDefault"`
+	} `json:"expected"`
 }
 
 func TestDeferTimeout(t *testing.T) {
-	for _, tc := range deferTimeoutCases {
-		t.Run(tc.name, func(t *testing.T) {
-			scaler := &autoscalingv1alpha1.LLMScaler{}
-			scaler.Spec.DeferTimeoutSeconds = tc.deferTimeout
-			got := deferTimeout(scaler)
-			if got != tc.want {
-				t.Fatalf("got %s, want %s", got, tc.want)
+	cases.Run(t, "testdata/helpers/defer-timeout", func(t *testing.T, tc deferTimeoutFile) {
+		scaler := &autoscalingv1alpha1.LLMScaler{}
+		scaler.Spec.DeferTimeoutSeconds = tc.Inputs.DeferTimeoutSeconds
+		got := deferTimeout(scaler)
+		if got != tc.Expected.Duration.Std() {
+			t.Fatalf("got %s, want %s", got, tc.Expected.Duration.Std())
+		}
+		if tc.Expected.EqualsDefault {
+			want := time.Duration(autoscalingv1alpha1.DefaultDeferTimeoutSeconds) * time.Second
+			if got != want {
+				t.Fatalf("got %s, want default %s", got, want)
 			}
-		})
-	}
+		}
+	})
 }
 
-type pastDeferTimeoutCase struct {
-	name     string
-	nilSince bool
-	timeout  time.Duration
-	elapsed  time.Duration
-	want     bool
+type pastDeferFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		NilSince bool           `json:"nilSince"`
+		Timeout  cases.Duration `json:"timeout"`
+		Elapsed  cases.Duration `json:"elapsed"`
+	} `json:"inputs"`
+	Expected struct {
+		Past bool `json:"past"`
+	} `json:"expected"`
 }
 
 func TestPastDeferTimeout(t *testing.T) {
-	for _, tc := range pastDeferTimeoutCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var since *metav1.Time
-			if !tc.nilSince {
-				stamped := metav1.NewTime(pastDeferBase)
-				since = &stamped
-			}
-			got := pastDeferTimeout(since, tc.timeout, pastDeferBase.Add(tc.elapsed))
-			if got != tc.want {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-		})
-	}
+	cases.Run(t, "testdata/helpers/past-defer-timeout", func(t *testing.T, tc pastDeferFile) {
+		var since *metav1.Time
+		if !tc.Inputs.NilSince {
+			stamped := metav1.NewTime(pastDeferBase)
+			since = &stamped
+		}
+		now := pastDeferBase.Add(tc.Inputs.Elapsed.Std())
+		got := pastDeferTimeout(since, tc.Inputs.Timeout.Std(), now)
+		if got != tc.Expected.Past {
+			t.Fatalf("got %v, want %v", got, tc.Expected.Past)
+		}
+	})
 }
 
-type deferralRequeueAfterCase struct {
-	name    string
-	holding bool
-	timeout time.Duration
-	until   time.Duration
-	pacing  time.Duration
-	want    time.Duration
+type requeueFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Holding bool           `json:"holding"`
+		Timeout cases.Duration `json:"timeout"`
+		Until   cases.Duration `json:"until"`
+		Pacing  cases.Duration `json:"pacing"`
+	} `json:"inputs"`
+	Expected struct {
+		After cases.Duration `json:"after"`
+	} `json:"expected"`
 }
 
 func TestDeferralRequeueAfter(t *testing.T) {
-	for _, tc := range deferralRequeueAfterCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := deferralRequeueAfter(deferralRequeueSync, tc.holding, tc.timeout, tc.until, tc.pacing)
-			if got != tc.want {
-				t.Fatalf("got %s, want %s", got, tc.want)
-			}
-		})
-	}
+	cases.Run(t, "testdata/helpers/deferral-requeue-after", func(t *testing.T, tc requeueFile) {
+		in := tc.Inputs
+		got := deferralRequeueAfter(deferralRequeueSync, in.Holding, in.Timeout.Std(), in.Until.Std(), in.Pacing.Std())
+		if got != tc.Expected.After.Std() {
+			t.Fatalf("got %s, want %s", got, tc.Expected.After.Std())
+		}
+	})
 }
 
-type forcedWritePaceCase struct {
-	name          string
-	recorded      bool
-	sync          time.Duration
-	at            time.Duration
-	wantAllowed   bool
-	wantRemaining *time.Duration
+type forcedWriteFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Recorded bool           `json:"recorded"`
+		Sync     cases.Duration `json:"sync"`
+		At       cases.Duration `json:"at"`
+	} `json:"inputs"`
+	Expected struct {
+		Allowed   bool            `json:"allowed"`
+		Remaining *cases.Duration `json:"remaining"`
+	} `json:"expected"`
 }
 
 func TestForcedWritePace(t *testing.T) {
-	for _, tc := range forcedWritePaceCases {
-		t.Run(tc.name, func(t *testing.T) {
-			allowed, remaining := forcedWritePace(forcedWriteBase, tc.recorded, tc.sync, forcedWriteBase.Add(tc.at))
-			if allowed != tc.wantAllowed {
-				t.Fatalf("allowed=%v, want %v", allowed, tc.wantAllowed)
-			}
-			if tc.wantRemaining != nil && remaining != *tc.wantRemaining {
-				t.Fatalf("remaining=%s, want %s", remaining, *tc.wantRemaining)
-			}
-		})
-	}
+	cases.Run(t, "testdata/helpers/forced-write-pace", func(t *testing.T, tc forcedWriteFile) {
+		at := forcedWriteBase.Add(tc.Inputs.At.Std())
+		allowed, remaining := forcedWritePace(forcedWriteBase, tc.Inputs.Recorded, tc.Inputs.Sync.Std(), at)
+		if allowed != tc.Expected.Allowed {
+			t.Fatalf("allowed=%v, want %v", allowed, tc.Expected.Allowed)
+		}
+		if tc.Expected.Remaining != nil && remaining != tc.Expected.Remaining.Std() {
+			t.Fatalf("remaining=%s, want %s", remaining, tc.Expected.Remaining.Std())
+		}
+	})
+}
+
+type memoryStep struct {
+	Op string `json:"op"`
+}
+
+type memoryFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Namespace string       `json:"namespace"`
+		Scaler    string       `json:"scaler"`
+		At        string       `json:"at"`
+		Steps     []memoryStep `json:"steps"`
+	} `json:"inputs"`
+	Expected struct{} `json:"expected"`
 }
 
 // TestDeferralMemoryClearedOnEndAndDelete checks the two ways the in-memory
 // pace record goes away: the deferral ending, and the scaler being deleted.
 func TestDeferralMemoryClearedOnEndAndDelete(t *testing.T) {
-	r := &LLMScalerReconciler{}
-	key := types.NamespacedName{Namespace: "ns", Name: "s"}
-	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	r.recordForcedWrite(key, now)
-	scaler := &autoscalingv1alpha1.LLMScaler{}
-	stamped := metav1.NewTime(now)
-	scaler.Status.DeferredSince = &stamped
+	cases.Run(t, "testdata/helpers/deferral-memory", func(t *testing.T, tc memoryFile) {
+		r := &LLMScalerReconciler{}
+		key := types.NamespacedName{Namespace: tc.Inputs.Namespace, Name: tc.Inputs.Scaler}
+		now, err := time.Parse(time.RFC3339, tc.Inputs.At)
+		if err != nil {
+			t.Fatalf("at: %v", err)
+		}
+		scaler := &autoscalingv1alpha1.LLMScaler{}
+		for _, step := range tc.Inputs.Steps {
+			switch step.Op {
+			case "record":
+				r.recordForcedWrite(key, now)
+			case "setSince":
+				stamped := metav1.NewTime(now)
+				scaler.Status.DeferredSince = &stamped
+			case "end":
+				r.endDeferral(key, scaler)
+			case "forget":
+				r.forgetRecommendations(key)
+			case "expectSinceCleared":
+				if scaler.Status.DeferredSince != nil {
+					t.Fatal("endDeferral left deferredSince set")
+				}
+			case "expectRecordCleared":
+				if _, ok := r.lastForcedWriteAt(key); ok {
+					t.Fatal("forced-write record still set")
+				}
+			default:
+				t.Fatalf("unknown step %q", step.Op)
+			}
+		}
+	})
+}
 
-	r.endDeferral(key, scaler)
-	if scaler.Status.DeferredSince != nil {
-		t.Fatal("endDeferral left deferredSince set")
-	}
-	if _, ok := r.lastForcedWriteAt(key); ok {
-		t.Fatal("endDeferral left the forced-write record")
-	}
-
-	r.recordForcedWrite(key, now)
-	r.forgetRecommendations(key)
-	if _, ok := r.lastForcedWriteAt(key); ok {
-		t.Fatal("forgetRecommendations left the forced-write record")
-	}
+type reasonFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+	} `json:"inputs"`
+	Expected struct {
+		Reason string `json:"reason"`
+	} `json:"expected"`
 }
 
 // TestReasonDeferralTimedOut pins the published condition reason, which users
 // match on in alerts and kubectl output.
 func TestReasonDeferralTimedOut(t *testing.T) {
-	if autoscalingv1alpha1.ReasonDeferralTimedOut != "DeferralTimedOut" {
-		t.Fatalf("ReasonDeferralTimedOut = %q, want DeferralTimedOut", autoscalingv1alpha1.ReasonDeferralTimedOut)
-	}
+	cases.Run(t, "testdata/helpers/reason-deferral-timed-out", func(t *testing.T, tc reasonFile) {
+		if autoscalingv1alpha1.ReasonDeferralTimedOut != tc.Expected.Reason {
+			t.Fatalf("ReasonDeferralTimedOut = %q, want %q", autoscalingv1alpha1.ReasonDeferralTimedOut, tc.Expected.Reason)
+		}
+	})
 }
 
-type stabilizationOp struct {
-	at        time.Duration
-	recommend *int32
-	holdAt    *int32
-	want      *int32
+type stabilizationOpFile struct {
+	At        cases.Duration `json:"at"`
+	Recommend *int32         `json:"recommend"`
+	HoldAt    *int32         `json:"holdAt"`
+	Want      *int32         `json:"want"`
 }
 
-type stabilizationCase struct {
-	name   string
-	window time.Duration
-	ops    []stabilizationOp
+type stabilizationFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Window cases.Duration        `json:"window"`
+		Ops    []stabilizationOpFile `json:"ops"`
+	} `json:"inputs"`
+	Expected struct{} `json:"expected"`
 }
 
 // TestStabilizeDesired runs each stabilization sequence on its own reconciler.
-// TestHoldAfterScaleDown's steps, including the window-0 reconciler, are rows
-// of the same table.
+// The window-0 pin is a row of the same table.
 func TestStabilizeDesired(t *testing.T) {
-	for _, tc := range stabilizationSequenceCases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &LLMScalerReconciler{}
-			for _, op := range tc.ops {
-				now := stabilizationBase.Add(op.at)
-				switch {
-				case op.holdAt != nil && op.recommend != nil:
-					t.Fatalf("op at %s sets both holdAt and recommend", op.at)
-				case op.holdAt != nil:
-					r.holdAfterScaleDown(stabilizationKey, *op.holdAt, tc.window, now)
-				case op.recommend != nil:
-					if op.want == nil {
-						t.Fatalf("recommend at %s has no want", op.at)
-					}
-					got := r.stabilizeDesired(stabilizationKey, *op.recommend, tc.window, now)
-					if got != *op.want {
-						t.Fatalf("at %s: got %d, want %d", op.at, got, *op.want)
-					}
-				default:
-					t.Fatalf("op at %s has neither holdAt nor recommend", op.at)
+	cases.Run(t, "testdata/helpers/stabilization", func(t *testing.T, tc stabilizationFile) {
+		r := &LLMScalerReconciler{}
+		window := tc.Inputs.Window.Std()
+		for _, op := range tc.Inputs.Ops {
+			now := stabilizationBase.Add(op.At.Std())
+			switch {
+			case op.HoldAt != nil && op.Recommend != nil:
+				t.Fatalf("op at %s sets both holdAt and recommend", op.At.Std())
+			case op.HoldAt != nil:
+				r.holdAfterScaleDown(stabilizationKey, *op.HoldAt, window, now)
+			case op.Recommend != nil:
+				if op.Want == nil {
+					t.Fatalf("recommend at %s has no want", op.At.Std())
 				}
+				got := r.stabilizeDesired(stabilizationKey, *op.Recommend, window, now)
+				if got != *op.Want {
+					t.Fatalf("at %s: got %d, want %d", op.At.Std(), got, *op.Want)
+				}
+			default:
+				t.Fatalf("op at %s has neither holdAt nor recommend", op.At.Std())
 			}
-		})
-	}
+		}
+	})
 }
 
-type parseTargetValueCase struct {
-	name    string
-	in      string
-	want    float64
-	wantErr bool
+type parseTargetFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Value string `json:"value"`
+	} `json:"inputs"`
+	Expected struct {
+		Value float64 `json:"value"`
+		Error bool    `json:"error"`
+	} `json:"expected"`
 }
 
 func TestParseTargetValue(t *testing.T) {
-	for _, tc := range parseTargetValueCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseTargetValue(tc.in)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("parseTargetValue(%q) error = %v, wantErr %v", tc.in, err, tc.wantErr)
-			}
-			if err == nil && got != tc.want {
-				t.Fatalf("parseTargetValue(%q) = %v, want %v", tc.in, got, tc.want)
-			}
-		})
-	}
+	cases.Run(t, "testdata/helpers/parse-target-value", func(t *testing.T, tc parseTargetFile) {
+		got, err := parseTargetValue(tc.Inputs.Value)
+		if (err != nil) != tc.Expected.Error {
+			t.Fatalf("parseTargetValue(%q) error = %v, wantErr %v", tc.Inputs.Value, err, tc.Expected.Error)
+		}
+		if err == nil && got != tc.Expected.Value {
+			t.Fatalf("parseTargetValue(%q) = %v, want %v", tc.Inputs.Value, got, tc.Expected.Value)
+		}
+	})
 }
 
-type queryPrometheusScalarCase struct {
-	name            string
-	result          string
-	want            float64
-	wantErrContains []string
+type promScalarFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Result string `json:"result"`
+	} `json:"inputs"`
+	Expected struct {
+		Value         float64  `json:"value"`
+		ErrorContains []string `json:"errorContains"`
+	} `json:"expected"`
 }
 
 func TestQueryPrometheusScalar(t *testing.T) {
-	for _, tc := range queryPrometheusScalarCases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"result":%s}}`, tc.result)
-			}))
-			defer srv.Close()
+	cases.Run(t, "testdata/helpers/query-prometheus-scalar", func(t *testing.T, tc promScalarFile) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprintf(w, `{"status":"success","data":{"result":%s}}`, tc.Inputs.Result)
+		}))
+		defer srv.Close()
 
-			got, err := queryPrometheusScalar(srv.URL, "some_query", nil)
-			if len(tc.wantErrContains) == 0 {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if got != tc.want {
-					t.Fatalf("got %v, want %v", got, tc.want)
-				}
-				return
+		got, err := queryPrometheusScalar(srv.URL, "some_query", nil)
+		if len(tc.Expected.ErrorContains) == 0 {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			if err == nil {
-				t.Fatalf("expected error containing %q, got value %v", tc.wantErrContains, got)
+			if got != tc.Expected.Value {
+				t.Fatalf("got %v, want %v", got, tc.Expected.Value)
 			}
-			for _, want := range tc.wantErrContains {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error = %q, want it to contain %q", err, want)
-				}
+			return
+		}
+		if err == nil {
+			t.Fatalf("expected error containing %q, got value %v", tc.Expected.ErrorContains, got)
+		}
+		for _, want := range tc.Expected.ErrorContains {
+			// An empty substring matches every error.
+			if want == "" {
+				t.Fatal("errorContains entry is empty")
 			}
-		})
-	}
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to contain %q", err, want)
+			}
+		}
+	})
 }
 
-type computeDesiredCase struct {
-	name        string
-	sample      string
-	ready       int64
-	minReplicas int32
-	maxReplicas int32
-	metricName  string
-	query       string
-	target      string
-	wantHave    bool
-	wantDesired int32
+type computeDesiredFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Sample      string `json:"sample"`
+		Ready       int64  `json:"ready"`
+		MinReplicas int32  `json:"minReplicas"`
+		MaxReplicas int32  `json:"maxReplicas"`
+		MetricName  string `json:"metricName"`
+		Query       string `json:"query"`
+		Target      string `json:"target"`
+	} `json:"inputs"`
+	Expected struct {
+		Have    bool  `json:"have"`
+		Desired int32 `json:"desired"`
+	} `json:"expected"`
 }
 
 // TestComputeDesiredFromMetrics covers non-finite samples and scale-from-zero.
 func TestComputeDesiredFromMetrics(t *testing.T) {
-	for _, tc := range computeDesiredFromMetricsCases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = fmt.Fprintf(w,
-					`{"status":"success","data":{"result":[{"metric":{},"value":[0,"%s"]}]}}`, tc.sample)
-			}))
-			defer srv.Close()
+	cases.Run(t, "testdata/helpers/compute-desired", func(t *testing.T, tc computeDesiredFile) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprintf(w,
+				`{"status":"success","data":{"result":[{"metric":{},"value":[0,"%s"]}]}}`, tc.Inputs.Sample)
+		}))
+		defer srv.Close()
 
-			scaler := &autoscalingv1alpha1.LLMScaler{
-				Spec: autoscalingv1alpha1.LLMScalerSpec{
-					ServerAddress: srv.URL,
-					MinReplicas:   tc.minReplicas,
-					MaxReplicas:   tc.maxReplicas,
-					Metrics: []autoscalingv1alpha1.MetricSpec{{
-						Name:   tc.metricName,
-						Query:  tc.query,
-						Target: tc.target,
-					}},
-				},
-			}
-			desired, haveMetric := (&LLMScalerReconciler{}).computeDesiredFromMetrics(context.Background(), scaler, tc.ready)
-			if haveMetric != tc.wantHave {
-				t.Errorf("haveMetric = %v, want %v", haveMetric, tc.wantHave)
-			}
-			if desired != tc.wantDesired {
-				t.Errorf("desired = %d, want %d", desired, tc.wantDesired)
-			}
-		})
-	}
+		scaler := &autoscalingv1alpha1.LLMScaler{
+			Spec: autoscalingv1alpha1.LLMScalerSpec{
+				ServerAddress: srv.URL,
+				MinReplicas:   tc.Inputs.MinReplicas,
+				MaxReplicas:   tc.Inputs.MaxReplicas,
+				Metrics: []autoscalingv1alpha1.MetricSpec{{
+					Name:   tc.Inputs.MetricName,
+					Query:  tc.Inputs.Query,
+					Target: tc.Inputs.Target,
+				}},
+			},
+		}
+		desired, haveMetric := (&LLMScalerReconciler{}).computeDesiredFromMetrics(
+			context.Background(), scaler, tc.Inputs.Ready)
+		if haveMetric != tc.Expected.Have {
+			t.Errorf("haveMetric = %v, want %v", haveMetric, tc.Expected.Have)
+		}
+		if desired != tc.Expected.Desired {
+			t.Errorf("desired = %d, want %d", desired, tc.Expected.Desired)
+		}
+	})
 }
 
-type scaleGuardCase struct {
-	name    string
-	current int32
-	desired int32
-	maxStep int32
-	want    int32
+type scaleGuardFile struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Inputs      struct {
+		Current int32 `json:"current"`
+		Desired int32 `json:"desired"`
+		MaxStep int32 `json:"maxStep"`
+	} `json:"inputs"`
+	Expected struct {
+		Want int32 `json:"want"`
+	} `json:"expected"`
 }
 
 func TestScaleGuard(t *testing.T) {
-	for _, tc := range scaleGuardCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := scaleGuard(tc.current, tc.desired, tc.maxStep)
-			if got != tc.want {
-				t.Fatalf("scaleGuard(%d, %d, %d) = %d, want %d", tc.current, tc.desired, tc.maxStep, got, tc.want)
-			}
-		})
-	}
+	cases.Run(t, "testdata/helpers/scale-guard", func(t *testing.T, tc scaleGuardFile) {
+		in := tc.Inputs
+		got := scaleGuard(in.Current, in.Desired, in.MaxStep)
+		if got != tc.Expected.Want {
+			t.Fatalf("scaleGuard(%d, %d, %d) = %d, want %d", in.Current, in.Desired, in.MaxStep, got, tc.Expected.Want)
+		}
+	})
 }

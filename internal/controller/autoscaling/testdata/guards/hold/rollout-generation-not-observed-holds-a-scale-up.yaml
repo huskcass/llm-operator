@@ -1,0 +1,19 @@
+"name": "rollout-generation-not-observed-holds-a-scale-up"
+"description": "rollout: generation not observed holds a scale-up"
+"inputs":
+  "guard": "rollout"
+  "state":
+    "spec": 5
+    "total": 5
+    "updated": 5
+    "ready": 5
+    "generation": 4
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 7
+"expected":
+  "held": true
+  "reason": "RolloutInProgress"
+  "why": "Deployment rollout in progress"

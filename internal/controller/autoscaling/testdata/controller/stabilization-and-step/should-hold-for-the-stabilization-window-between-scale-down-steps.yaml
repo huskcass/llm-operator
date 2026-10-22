@@ -1,0 +1,29 @@
+"name": "should-hold-for-the-stabilization-window-between-scale-down-steps"
+"description": "should hold for the stabilization window between scale-down steps"
+"inputs":
+  "plainReconciler": true
+  "prelude": "enabling a 300s window and a 2-replica step cap"
+  "spec":
+    "stabilizationWindowSeconds": 300
+    "maxStepReplicas": 2
+  "metric": "0"
+  "steps":
+  - "by": "starting settled at 5 with an idle metric"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "spec": 5
+  - "by": "checking the first step landed"
+    "skipReconcile": true
+  - "by": "settling the fleet at 3 so neither the rollout nor the settle guard fires"
+    "observeSpec": 3
+  - "by": "checking the next step is held; without the pin it would drop to 1"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 3
+  - {}
+  - "replicas": 3

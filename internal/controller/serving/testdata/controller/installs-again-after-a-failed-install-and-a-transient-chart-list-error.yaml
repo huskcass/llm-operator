@@ -1,0 +1,57 @@
+name: installs-again-after-a-failed-install-and-a-transient-chart-list-error
+description: installs again after a failed install and a transient chart list error
+steps:
+  - action: setHelm
+    installErr: boom
+    keepFailed: true
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect:
+      errorContains: boom
+      appliedHash:
+        empty: true
+      history:
+        length: 0
+      releaseUID: self
+      release:
+        labels:
+          serving.modelsphere.dev/llmservice-uid: self
+        status: failed
+      conditions:
+        - type: Applied
+          reason: ApplyFailed
+  - action: setVersions
+    listErr: registry down
+  - action: reconcile
+    expect:
+      errorContains: registry down
+      phase: Failed
+      conditions:
+        - type: Applied
+          reason: ChartResolveFailed
+        - type: Adopted
+          absent: true
+      releaseUID: self
+      installs: 1
+      upgrades: 0
+      uninstalls: 0
+  - action: setVersions
+    listErr: ""
+  - action: setHelm
+    installErr: ""
+  - action: reconcile
+    expect:
+      installs: 2
+      upgrades: 0
+      uninstalls: 1
+      rollbacks: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Installed
+        - type: Adopted
+          absent: true
+      message:
+        notContains:
+          - Drift

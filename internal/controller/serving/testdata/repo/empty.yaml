@@ -1,0 +1,7 @@
+name: empty
+description: empty repository is refused
+allowed:
+  - oci://ghcr.io/modelsphere
+  - https://modelsphere.github.io/helm-charts/
+repo: ""
+want: false

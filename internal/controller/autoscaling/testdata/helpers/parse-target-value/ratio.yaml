@@ -1,0 +1,6 @@
+"name": "ratio"
+"description": "ratio"
+"inputs":
+  "value": "0.8"
+"expected":
+  "value": 0.8

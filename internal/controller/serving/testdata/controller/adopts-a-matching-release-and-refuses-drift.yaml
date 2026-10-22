@@ -1,0 +1,57 @@
+name: adopts-a-matching-release-and-refuses-drift
+description: adopts a matching release and refuses drift
+steps:
+  - action: putRelease
+    release:
+      revision: 7
+      status: deployed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      config:
+        replicaCount: 1
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect:
+      installs: 0
+      upgrades: 0
+      phase: Applied
+      conditions:
+        - type: Adopted
+          status: "True"
+          reason: Adopted
+        - type: Applied
+          reason: Adopted
+      history:
+        entries:
+          - index: 0
+            revision: 7
+      releaseUID: self
+  - action: putRelease
+    freshNamespace: true
+    release:
+      revision: 3
+      status: deployed
+      chartName: other
+      chartVersion: "0.1.0"
+      config:
+        replicaCount: 9
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect: {}
+  - action: reconcile
+    expect:
+      installs: 0
+      upgrades: 0
+      phase: Failed
+      observedGeneration: current
+      conditions:
+        - type: Adopted
+          status: "False"
+          reason: Drift
+      message:
+        contains:
+          - chart
+          - values
+      releaseUID: empty

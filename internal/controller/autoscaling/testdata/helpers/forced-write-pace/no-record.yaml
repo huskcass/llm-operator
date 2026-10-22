@@ -1,0 +1,9 @@
+"name": "no-record"
+"description": "no record"
+"inputs":
+  "recorded": false
+  "sync": "15s"
+  "at": "0s"
+"expected":
+  "allowed": true
+  "remaining": "0s"

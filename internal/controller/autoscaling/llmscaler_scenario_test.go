@@ -93,14 +93,6 @@ type sinceExpect struct {
 	offset time.Duration
 }
 
-func sinceAt(offset time.Duration) sinceExpect {
-	return sinceExpect{kind: sinceOffset, offset: offset}
-}
-
-func sinceNil() sinceExpect { return sinceExpect{kind: sinceNone} }
-
-func sinceSeed() sinceExpect { return sinceExpect{kind: sinceSeeded} }
-
 // scalerSpecPatch is applied to the fixture LLMScaler before the steps.
 // A nil field is left at the fixture value. DeferTimeoutSeconds is a pointer
 // on the API, so a pointer to 0 is "never force" and nil means "don't patch".
@@ -635,7 +627,11 @@ func assertCondition(scaler *autoscalingv1alpha1.LLMScaler, exp condExpect) {
 	if exp.reason != "" {
 		Expect(cond.Reason).To(Equal(exp.reason))
 	}
+	// An empty substring matches every message, so it is rejected on its own.
 	for _, sub := range exp.messageContains {
+		if sub == "" {
+			Fail("messageContains entry is empty")
+		}
 		Expect(cond.Message).To(ContainSubstring(sub))
 	}
 	if exp.observedGenerationCurrent {
@@ -649,6 +645,12 @@ func assertEvents(run *scenarioRun, exp stepExpect) {
 	}
 	Expect(run.rec).NotTo(BeNil())
 	for _, want := range exp.events {
+		// An empty substring matches every event, so it is rejected on its own.
+		for _, sub := range want.contains {
+			if sub == "" {
+				Fail("events.contains entry is empty")
+			}
+		}
 		var got string
 		Expect(run.rec.Events).To(Receive(&got))
 		if want.prefix != "" {

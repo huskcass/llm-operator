@@ -1,0 +1,34 @@
+name: rolls-back-a-stale-owned-pending-upgrade-and-upgrades
+description: rolls back a stale owned pending-upgrade and upgrades
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 5
+      status: pending-upgrade
+      updated: "-1h"
+  - action: setHistory
+    entries:
+      - owned: true
+        revision: 2
+        status: deployed
+        updated: "-3h"
+      - owned: true
+        revision: 4
+        status: deployed
+        updated: "-2h"
+      - slot: true
+  - action: reconcile
+    expect:
+      rollbacks: 1
+      lastRollback: 4
+      upgrades: 1
+      uninstalls: 0
+      installs: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Upgraded
+      eventContains: RecoveredPendingRelease

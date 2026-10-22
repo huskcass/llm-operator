@@ -1,0 +1,6 @@
+"name": "not-a-number"
+"description": "not a number"
+"inputs":
+  "value": "abc"
+"expected":
+  "error": true

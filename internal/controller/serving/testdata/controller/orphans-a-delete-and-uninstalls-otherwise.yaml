@@ -1,0 +1,27 @@
+name: orphans-a-delete-and-uninstalls-otherwise
+description: orphans a delete and uninstalls otherwise
+steps:
+  - action: create
+    name: keep
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: update
+    annotations:
+      serving.modelsphere.dev/deletion-policy: Orphan
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 0
+      getsUnchanged: true
+      notFound: true
+  - action: create
+    name: drop
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 1
+      notFound: true

@@ -1,0 +1,5 @@
+description: named, in range
+spec: ">=0.7.1"
+want: "0.7.3"
+got: "0.7.3"
+noList: true

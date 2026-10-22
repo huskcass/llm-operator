@@ -1,0 +1,8 @@
+"name": "nil-deferredsince"
+"description": "nil deferredSince"
+"inputs":
+  "nilSince": true
+  "timeout": "1m"
+  "elapsed": "1h"
+"expected":
+  "past": false

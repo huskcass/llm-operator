@@ -137,6 +137,29 @@ The release workflow packages and publishes `dist/chart`.
 
 More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
+## File-based tests
+
+Unit and envtest cases live in YAML under a `testdata/` directory next to the package, one file per case. The Go tests load those files, stand up fixtures, and check the result. Kind-based end-to-end tests under `test/e2e` are unchanged.
+
+```
+internal/<pkg>/testdata/<suite>/<case-name>.yaml
+```
+
+The suite directory groups a table (`guards/hold`, `controller/metric-scaling`). The file name is the case name in kebab-case. A document has:
+
+- exactly one YAML mapping. An empty file, a comment-only file, `null`, a bare `---`, or a second document fails the load. A trailing `---` counts as a second document.
+- `name`, optional. When set it must equal the file name without `.yaml`.
+- `description`, the sentence `go test -v` and Ginkgo print. When it is empty, the file name is used.
+- `inputs` and `expected`, decoded into a Go struct. An unknown field, a duplicate key, a key in the wrong case, or a value of the wrong type fails the load. Mapping keys must match the json name of the field, including case.
+
+Only `*.yaml` is loaded. A `*.yml` file fails the load, so two extensions cannot share a stem. Other names are ignored. The suffix check is case-sensitive.
+
+Durations are Go duration strings (`30s`, `1m1s`, `-2h`, `0s`). Only a pointer to a duration may be omitted or `null`. A non-pointer duration rejects `null` and treats an omission as zero. A pointer to zero is `"0s"`, not a bare `0`. Times relative to a fixed origin are offsets from that origin; the runner adds them.
+
+The loader is `internal/testutil/cases`. It reads every `*.yaml` under the directory, in path order, and rejects an empty directory. `cases.Run` starts one subtest per file. Ginkgo tables use `ginkgocases.Entries` in `internal/testutil/cases/ginkgocases`, so a test binary that does not import that package does not register Ginkgo flags.
+
+To add a case, copy a nearby file, change the inputs and the expected result, and run `make test`.
+
 ## License
 
 Copyright 2026.

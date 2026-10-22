@@ -1,0 +1,6 @@
+"name": "nil-spec"
+"description": "nil spec"
+"inputs": {}
+"expected":
+  "duration": "600s"
+  "equalsDefault": true

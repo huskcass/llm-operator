@@ -1,0 +1,26 @@
+name: refuses-a-chart-repository-it-was-not-started-to-install-from
+description: refuses a chart repository it was not started to install from
+steps:
+  - action: setAllowed
+    repos:
+      - oci://ghcr.io/other
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect:
+      helmTouched: 0
+      listCalls: 0
+      phase: Failed
+      conditions:
+        - type: Applied
+          reason: ChartRepoNotAllowed
+      message:
+        contains:
+          - oci://ghcr.io/modelsphere/charts
+  - action: setAllowed
+    repos:
+      - oci://ghcr.io/modelsphere
+  - action: reconcile
+    expect:
+      installs: 1
+      phase: Applied

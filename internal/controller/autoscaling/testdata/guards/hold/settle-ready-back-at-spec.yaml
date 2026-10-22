@@ -1,0 +1,13 @@
+"name": "settle-ready-back-at-spec"
+"description": "settle: ready back at spec"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 5
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "held": false
+  "reason": "ScaleDownSettling"

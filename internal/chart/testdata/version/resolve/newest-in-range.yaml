@@ -1,0 +1,7 @@
+description: newest in range
+spec: ">=0.7.1 <0.9.0"
+got: "0.8.1"
+list:
+  - "0.7.1"
+  - "0.8.1"
+  - "0.9.0"

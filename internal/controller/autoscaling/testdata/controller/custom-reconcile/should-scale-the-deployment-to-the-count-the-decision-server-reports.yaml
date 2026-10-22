@@ -1,0 +1,12 @@
+# active 4 is an absolute count, so 1 ready replica scales straight to 4.
+"name": "should-scale-the-deployment-to-the-count-the-decision-server-reports"
+"description": "should scale the Deployment to the count the decision server reports"
+"inputs":
+  "createBy": "creating an LLMScaler with no metrics at all"
+  "reconcileBy": "running the Reconciler"
+  "replicasBy": "checking the Deployment landed on the decision, not on a ratio of it"
+  "statusBy": "checking the status reports the same recommendation"
+"expected":
+  "replicas": 4
+  "desired": 4
+  "decisionStatus": "True"

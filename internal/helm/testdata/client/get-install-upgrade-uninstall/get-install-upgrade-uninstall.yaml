@@ -1,0 +1,58 @@
+description: get, install, upgrade, and uninstall
+namespace: default
+chartRepo: oci://example.com/charts
+chartName: tiny
+chartVersion: "0.1.0"
+steps:
+  - op: get
+    release: tiny
+    absent: true
+  - op: install
+    release: tiny
+    forceConflicts: true
+    values:
+      v: one
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: tiny
+    expect:
+      revision: 1
+      status: deployed
+      chartName: tiny
+      chartVersion: "0.1.0"
+      config:
+        v: one
+      labels:
+        serving.modelsphere.dev/llmservice-uid: uid-1
+      updatedAfterStart: true
+  - op: get
+    release: tiny
+    expect:
+      revision: 1
+      config:
+        v: one
+      labels:
+        serving.modelsphere.dev/llmservice-uid: uid-1
+      updatedAfterStart: true
+  - op: upgrade
+    release: tiny
+    values:
+      v: two
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: tiny
+    expect:
+      revision: 2
+      status: deployed
+      config:
+        v: two
+      labels:
+        serving.modelsphere.dev/llmservice-uid: uid-1
+      updatedAfterStart: true
+  - op: uninstall
+    release: tiny
+  - op: get
+    release: tiny
+    absent: true
+  - op: uninstall
+    release: tiny

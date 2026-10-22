@@ -1,0 +1,8 @@
+"name": "an-empty-decision-list-is-not-a-zero"
+"description": "an empty decision list is not a zero"
+"inputs":
+  "status": 200
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[]}"
+"expected":
+  "errorContains": "no decision for serviceId \"svc\""

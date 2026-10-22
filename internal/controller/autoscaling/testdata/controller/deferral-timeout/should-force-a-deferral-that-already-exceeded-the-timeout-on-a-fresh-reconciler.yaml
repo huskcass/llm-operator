@@ -1,0 +1,23 @@
+# deferredSince lives in status, so a fresh reconciler still enforces the deadline.
+"name": "should-force-a-deferral-that-already-exceeded-the-timeout-on-a-fresh-reconciler"
+"description": "should force a deferral that already exceeded the timeout on a fresh reconciler"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+  "rollout": true
+  "seedDeferredSince": "-2h"
+  "expectNilRecommendations": true
+  "steps":
+  - "at": "0s"
+"expected":
+  "steps":
+  - "replicas": 2
+    "deferredSince": "seed"
+    "applied": 2
+    "condition":
+      "status": "False"
+      "reason": "DeferralTimedOut"
+    "events":
+    - "prefix": "Warning DeferralTimedOut"
+      "contains":
+      - "1 -> 2"

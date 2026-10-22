@@ -1,0 +1,36 @@
+name: does-not-write-a-pending-release-it-does-not-own
+description: does not write a pending release it does not own
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      revision: 3
+      status: pending-upgrade
+      chartName: sglang
+      chartVersion: "0.8.6"
+      updated: "-1h"
+  - action: reconcile
+    expect:
+      requeue:
+        exact: "1m"
+      installs: 0
+      upgrades: 0
+      uninstalls: 0
+      rollbacks: 0
+      phase: Failed
+      message:
+        equals: "release is pending-upgrade; another client is operating on it"
+      conditions:
+        - type: Applied
+          status: "False"
+          reason: PendingRelease
+      observedGeneration: current
+  - action: reconcile
+    expect:
+      requeue:
+        exact: "1m"
+      installs: 0
+      upgrades: 0
+      uninstalls: 0
+      rollbacks: 0

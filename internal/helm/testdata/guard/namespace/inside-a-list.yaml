@@ -1,0 +1,15 @@
+description: inside a list
+manifest: |
+  apiVersion: v1
+  kind: List
+  items:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: a
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: b
+      namespace: kube-system
+refused: 'Role "b" into namespace kube-system'

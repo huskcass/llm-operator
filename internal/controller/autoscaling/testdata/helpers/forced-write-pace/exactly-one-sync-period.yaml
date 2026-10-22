@@ -1,0 +1,8 @@
+"name": "exactly-one-sync-period"
+"description": "exactly one sync period"
+"inputs":
+  "recorded": true
+  "sync": "15s"
+  "at": "15s"
+"expected":
+  "allowed": true

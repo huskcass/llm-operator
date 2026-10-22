@@ -1,0 +1,23 @@
+name: flat
+description: flat merge of four layers
+layers:
+  - name: a
+    values: '{"x":1,"m":{"a":1,"b":2},"s":[1],"keep":true}'
+  - name: b
+    values: '{"x":2,"m":{"b":null,"c":3},"s":[2,3],"n":null}'
+  - name: empty
+  - name: scalar
+    values: '{"m":"replaced"}'
+checks:
+  - path: ["x"]
+    equals: 2
+  - path: ["n"]
+    absent: true
+  - path: ["keep"]
+    equals: true
+  - path: ["m"]
+    equals: replaced
+  - path: ["s"]
+    equals:
+      - 2
+      - 3

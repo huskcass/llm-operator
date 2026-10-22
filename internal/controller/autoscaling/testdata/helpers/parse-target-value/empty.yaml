@@ -1,0 +1,6 @@
+"name": "empty"
+"description": "empty"
+"inputs":
+  "value": ""
+"expected":
+  "error": true

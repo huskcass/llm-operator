@@ -1,0 +1,56 @@
+description: history newest first and rollback of a pending upgrade
+namespace: default
+seed:
+  - name: tiny
+    revision: 1
+    status: deployed
+    updated: "-2h"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: tiny
+  - name: tiny
+    revision: 2
+    status: failed
+    updated: "-1h"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: tiny
+  - name: tiny
+    revision: 3
+    status: pending-upgrade
+    updated: "-30m"
+    labels:
+      serving.modelsphere.dev/llmservice-uid: uid-1
+      serving.modelsphere.dev/llmservice: tiny
+steps:
+  - op: get
+    release: tiny
+    expect:
+      revision: 3
+      status: pending-upgrade
+      updated: "-30m"
+      labels:
+        serving.modelsphere.dev/llmservice-uid: uid-1
+  - op: history
+    release: tiny
+    history:
+      - revision: 3
+        status: pending-upgrade
+      - revision: 2
+        status: failed
+      - revision: 1
+        status: deployed
+        updated: "-2h"
+        labels:
+          serving.modelsphere.dev/llmservice-uid: uid-1
+  - op: rollback
+    release: tiny
+    revision: 1
+  - op: get
+    release: tiny
+    expect:
+      revision: 4
+      status: deployed
+      chartName: tiny
+      labels:
+        serving.modelsphere.dev/llmservice-uid: uid-1

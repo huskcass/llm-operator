@@ -1,0 +1,24 @@
+name: upgrades-an-owned-deployed-release-whose-status-was-lost
+description: upgrades an owned deployed release whose status was lost
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 4
+      status: deployed
+      updated: "-1h"
+  - action: reconcile
+    expect:
+      upgrades: 1
+      installs: 0
+      uninstalls: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Upgraded
+        - type: Adopted
+          absent: true
+      releaseUID: self
+      helmRevision: 5

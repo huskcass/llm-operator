@@ -1,0 +1,27 @@
+name: honors-force-conflicts-only-for-the-current-generation
+description: honors force-conflicts only for the current generation
+steps:
+  - action: create
+    version: "0.8.6"
+    annotations:
+      serving.modelsphere.dev/force-conflicts: "1"
+  - action: reconcile
+    expect:
+      lastForce: true
+      history:
+        entries:
+          - index: 0
+            forceConflicts: true
+  - action: update
+    layers:
+      - name: site
+        values: '{"replicaCount":2}'
+    expect:
+      generation: 2
+  - action: reconcile
+    expect:
+      lastForce: false
+      history:
+        entries:
+          - index: 0
+            forceConflicts: false

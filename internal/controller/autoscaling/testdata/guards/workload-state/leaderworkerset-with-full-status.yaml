@@ -1,0 +1,26 @@
+"name": "leaderworkerset-with-full-status"
+"description": "LeaderWorkerSet with full status"
+"inputs":
+  "kind": "LeaderWorkerSet"
+  "object":
+    "apiVersion": "leaderworkerset.x-k8s.io/v1"
+    "kind": "LeaderWorkerSet"
+    "metadata":
+      "generation": 9
+    "spec":
+      "replicas": 4
+    "status":
+      "readyReplicas": 3
+      "replicas": 6
+      "updatedReplicas": 2
+      "terminatingReplicas": 1
+      "observedGeneration": 8
+"expected":
+  "spec": 4
+  "total": 6
+  "updated": 2
+  "ready": 3
+  "terminating": 1
+  "terminatingReported": true
+  "generation": 9
+  "observedGeneration": 8

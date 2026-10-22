@@ -1,26 +1,36 @@
 package serving
 
-import "testing"
+import (
+	"testing"
 
-const modelsphereOCI = "oci://ghcr.io/modelsphere"
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
+)
+
+// repoCase is one chartRepoAllowed input.
+// allowed is the allowlist and must be set, possibly as an empty list.
+// An empty list and a nil list both permit every repository; nilAllowlist
+// is how a case passes nil explicitly. Omitting both is an error, because
+// a forgotten allowlist would otherwise permit every repository.
+type repoCase struct {
+	Name         string   `json:"name,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	Allowed      []string `json:"allowed,omitempty"`
+	NilAllowlist bool     `json:"nilAllowlist,omitempty"`
+	Repo         string   `json:"repo"`
+	Want         bool     `json:"want"`
+}
 
 func TestChartRepoAllowed(t *testing.T) {
-	allowed := []string{modelsphereOCI, "https://modelsphere.github.io/helm-charts/"}
-	for repo, want := range map[string]bool{
-		modelsphereOCI:                              true,
-		"oci://ghcr.io/modelsphere/charts":          true,
-		"oci://ghcr.io/modelsphere/charts/":         true,
-		"https://modelsphere.github.io/helm-charts": true,
-		"oci://ghcr.io/modelsphere-x/charts":        false,
-		"oci://ghcr.io/other/charts":                false,
-		"https://modelsphere.github.io":             false,
-		"":                                          false,
-	} {
-		if got := chartRepoAllowed(allowed, repo); got != want {
-			t.Errorf("%q: got %v, want %v", repo, got, want)
+	cases.Run(t, "testdata/repo", func(t *testing.T, tc repoCase) {
+		if !tc.NilAllowlist && tc.Allowed == nil {
+			t.Fatal("set allowed (an empty list allows every repository) or nilAllowlist")
 		}
-	}
-	if !chartRepoAllowed(nil, "https://anything.example.com/charts") {
-		t.Error("no allowlist allows any repository")
-	}
+		var allowed []string
+		if !tc.NilAllowlist {
+			allowed = tc.Allowed
+		}
+		if got := chartRepoAllowed(allowed, tc.Repo); got != tc.Want {
+			t.Errorf("%s: %q: got %v, want %v", tc.Description, tc.Repo, got, tc.Want)
+		}
+	})
 }

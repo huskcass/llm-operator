@@ -1,0 +1,18 @@
+"name": "rollout-fully-rolled-out-does-not-hold"
+"description": "rollout: fully rolled out does not hold"
+"inputs":
+  "guard": "rollout"
+  "state":
+    "spec": 5
+    "total": 5
+    "updated": 5
+    "ready": 5
+    "generation": 3
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "held": false
+  "reason": "RolloutInProgress"

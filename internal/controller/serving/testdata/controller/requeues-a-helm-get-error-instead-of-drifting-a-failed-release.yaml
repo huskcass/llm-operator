@@ -1,0 +1,35 @@
+name: requeues-a-helm-get-error-instead-of-drifting-a-failed-release
+description: requeues a helm get error instead of drifting a failed release
+steps:
+  - action: setHelm
+    installErr: boom
+    keepFailed: true
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect:
+      errorContains: boom
+  - action: setHelm
+    installErr: ""
+    getErr: apiserver timeout
+  - action: reconcile
+    expect:
+      errorContains: apiserver timeout
+      conditions:
+        - type: Applied
+          reason: ApplyFailed
+        - type: Adopted
+          absent: true
+      uninstalls: 0
+      installs: 1
+  - action: setHelm
+    getErr: ""
+  - action: reconcile
+    expect:
+      uninstalls: 1
+      installs: 2
+      upgrades: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Installed

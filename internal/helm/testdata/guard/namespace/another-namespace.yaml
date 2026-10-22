@@ -1,0 +1,8 @@
+description: another namespace
+manifest: |
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: a
+    namespace: kube-system
+refused: into namespace kube-system

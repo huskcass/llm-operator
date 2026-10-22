@@ -1,0 +1,5 @@
+description: exact moves a running one off
+spec: "0.7.2"
+keep: "0.7.1"
+got: "0.7.2"
+noList: true

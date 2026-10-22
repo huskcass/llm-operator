@@ -1,0 +1,8 @@
+description: own namespace
+manifest: |
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: a
+    namespace: models
+refused: ""

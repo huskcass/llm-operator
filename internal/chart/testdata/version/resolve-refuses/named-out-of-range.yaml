@@ -1,0 +1,5 @@
+description: a named version out of range
+spec: ">=0.7.1"
+want: "0.6.0"
+noList: true
+errorContains: "not in the catalog's"

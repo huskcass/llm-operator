@@ -1,0 +1,5 @@
+description: nothing in range
+spec: ">=0.7.1"
+list:
+  - "0.6.0"
+errorContains: "no chart version satisfies"

@@ -1,0 +1,17 @@
+"name": "rollout-non-deployment-is-never-held"
+"description": "rollout: non-Deployment is never held"
+"inputs":
+  "guard": "rollout"
+  "state":
+    "spec": 5
+    "total": 6
+    "updated": 0
+    "ready": 5
+    "generation": 4
+    "observedGeneration": 1
+  "intent":
+    "from": 5
+    "to": 7
+"expected":
+  "held": false
+  "reason": "RolloutInProgress"

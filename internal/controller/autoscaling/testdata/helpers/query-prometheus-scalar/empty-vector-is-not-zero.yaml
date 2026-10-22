@@ -1,0 +1,7 @@
+"name": "empty-vector-is-not-zero"
+"description": "empty vector is not zero"
+"inputs":
+  "result": "[]"
+"expected":
+  "errorContains":
+  - "returned no data"

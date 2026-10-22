@@ -19,16 +19,15 @@ import (
 	"helm.sh/helm/v4/pkg/storage/driver"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/modelsphere/llm-operator/internal/testutil/cases"
 )
 
 const (
-	tinyVersion    = "0.1.0"
-	tinyChartName  = "tiny"
-	testNamespace  = "default"
-	testReleaseUID = "uid-1"
-	uidLabelKey    = "serving.modelsphere.dev/llmservice-uid"
-	nameLabelKey   = "serving.modelsphere.dev/llmservice"
-	testRepo       = "oci://example.com/charts"
+	tinyVersion   = "0.1.0"
+	tinyChartName = "tiny"
+	testNamespace = "default"
+	testRepo      = "oci://example.com/charts"
 )
 
 func testClient(t *testing.T, chartDir string) (*Client, *action.Configuration) {
@@ -80,176 +79,6 @@ func writeTinyChart(t *testing.T) string {
 	return dir
 }
 
-func TestGetInstallUpgradeUninstall(t *testing.T) {
-	const valueOne = "one"
-	c, _ := testClient(t, writeTinyChart(t))
-	ctx := t.Context()
-	const ns, name = testNamespace, tinyChartName
-	ref := ChartRef{Repo: testRepo, Name: name, Version: tinyVersion}
-	labels := testLabels(name)
-	before := time.Now().Add(-time.Second)
-
-	got, err := c.Get(ctx, ns, name)
-	if err != nil || got != nil {
-		t.Fatalf("absent get = %#v, %v", got, err)
-	}
-
-	installed, err := c.Install(ctx, ns, name, ref, map[string]any{"v": valueOne}, ApplyOpts{ForceConflicts: true, Labels: labels})
-	if err != nil {
-		t.Fatalf("install: %v", err)
-	}
-	if installed.Revision != 1 || installed.Status != "deployed" || installed.ChartName != name || installed.ChartVersion != tinyVersion {
-		t.Fatalf("install release = %#v", installed)
-	}
-	if installed.Config["v"] != valueOne {
-		t.Fatalf("install config = %#v", installed.Config)
-	}
-	if installed.Labels[uidLabelKey] != testReleaseUID || installed.Updated.Before(before) {
-		t.Fatalf("install labels/updated = %#v", installed)
-	}
-
-	got, err = c.Get(ctx, ns, name)
-	if err != nil || got == nil || got.Revision != 1 || got.Config["v"] != valueOne {
-		t.Fatalf("get after install = %#v, %v", got, err)
-	}
-	if got.Labels[uidLabelKey] != testReleaseUID || got.Updated.Before(before) {
-		t.Fatalf("get labels/updated = %#v", got)
-	}
-
-	upgraded, err := c.Upgrade(ctx, ns, name, ref, map[string]any{"v": "two"}, ApplyOpts{Labels: labels})
-	if err != nil {
-		t.Fatalf("upgrade: %v", err)
-	}
-	if upgraded.Revision != 2 || upgraded.Config["v"] != "two" || upgraded.Status != "deployed" {
-		t.Fatalf("upgrade release = %#v", upgraded)
-	}
-	if upgraded.Labels[uidLabelKey] != testReleaseUID || upgraded.Updated.Before(before) {
-		t.Fatalf("upgrade labels/updated = %#v", upgraded)
-	}
-
-	if err := c.Uninstall(ctx, ns, name); err != nil {
-		t.Fatalf("uninstall: %v", err)
-	}
-	got, err = c.Get(ctx, ns, name)
-	if err != nil || got != nil {
-		t.Fatalf("get after uninstall = %#v, %v", got, err)
-	}
-	if err := c.Uninstall(ctx, ns, name); err != nil {
-		t.Fatalf("uninstall absent: %v", err)
-	}
-}
-
-func TestHistoryNewestFirstAndRollbackPendingUpgrade(t *testing.T) {
-	c, cfg := testClient(t, writeTinyChart(t))
-	ctx := t.Context()
-	const ns, name = testNamespace, tinyChartName
-	labels := testLabels(name)
-	deployedAt := time.Now().Add(-2 * time.Hour).UTC()
-	failedAt := time.Now().Add(-time.Hour).UTC()
-	pendingAt := time.Now().Add(-30 * time.Minute).UTC()
-	storeRelease(t, cfg, storedRelease(name, 1, common.StatusDeployed, deployedAt, labels))
-	storeRelease(t, cfg, storedRelease(name, 2, common.StatusFailed, failedAt, labels))
-	storeRelease(t, cfg, storedRelease(name, 3, common.StatusPendingUpgrade, pendingAt, labels))
-
-	got, err := c.Get(ctx, ns, name)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Revision != 3 || got.Status != string(common.StatusPendingUpgrade) || !got.Updated.Equal(pendingAt) {
-		t.Fatalf("get pending = %#v", got)
-	}
-	if got.Labels[uidLabelKey] != testReleaseUID {
-		t.Fatalf("get labels = %#v", got.Labels)
-	}
-
-	hist, err := c.History(ctx, ns, name)
-	if err != nil {
-		t.Fatalf("history: %v", err)
-	}
-	if len(hist) != 3 || hist[0].Revision != 3 || hist[1].Revision != 2 || hist[2].Revision != 1 {
-		t.Fatalf("history = %#v", hist)
-	}
-	if hist[0].Status != string(common.StatusPendingUpgrade) || hist[1].Status != string(common.StatusFailed) || hist[2].Status != string(common.StatusDeployed) {
-		t.Fatalf("history status = %#v", hist)
-	}
-	if !hist[2].Updated.Equal(deployedAt) || hist[2].Labels[uidLabelKey] != testReleaseUID {
-		t.Fatalf("deployed history = %#v", hist[2])
-	}
-
-	if err := c.Rollback(ctx, ns, name, 1); err != nil {
-		t.Fatalf("rollback: %v", err)
-	}
-	got, err = c.Get(ctx, ns, name)
-	if err != nil {
-		t.Fatalf("get after rollback: %v", err)
-	}
-	if got.Status != string(common.StatusDeployed) || got.Revision != 4 || got.Labels[uidLabelKey] != testReleaseUID || got.ChartName != name {
-		t.Fatalf("rolled back = %#v", got)
-	}
-}
-
-func TestPendingInstallFailedAndAbsentHistory(t *testing.T) {
-	c, cfg := testClient(t, writeTinyChart(t))
-	ctx := t.Context()
-	const ns = testNamespace
-	labels := testLabels("fresh")
-	failedAt := time.Now().Add(-time.Hour).UTC()
-	installAt := time.Now().Add(-3 * time.Hour).UTC()
-	storeRelease(t, cfg, storedRelease("fresh", 1, common.StatusPendingInstall, installAt, labels))
-	storeRelease(t, cfg, storedRelease("broke", 1, common.StatusFailed, failedAt, nil))
-
-	hist, err := c.History(ctx, ns, "fresh")
-	if err != nil || len(hist) != 1 || hist[0].Status != string(common.StatusPendingInstall) || !hist[0].Updated.Equal(installAt) {
-		t.Fatalf("pending-install history = %#v, %v", hist, err)
-	}
-	if err := c.Uninstall(ctx, ns, "fresh"); err != nil {
-		t.Fatalf("uninstall pending-install: %v", err)
-	}
-	got, err := c.Get(ctx, ns, "fresh")
-	if err != nil || got != nil {
-		t.Fatalf("get after uninstall pending-install = %#v, %v", got, err)
-	}
-
-	got, err = c.Get(ctx, ns, "broke")
-	if err != nil || got == nil || got.Status != string(common.StatusFailed) || !got.Updated.Equal(failedAt) {
-		t.Fatalf("failed get = %#v, %v", got, err)
-	}
-	hist, err = c.History(ctx, ns, "broke")
-	if err != nil || len(hist) != 1 || hist[0].Status != string(common.StatusFailed) || hist[0].Revision != 1 {
-		t.Fatalf("failed history = %#v, %v", hist, err)
-	}
-
-	missing, err := c.History(ctx, ns, "absent")
-	if err != nil || missing != nil {
-		t.Fatalf("absent history = %#v, %v", missing, err)
-	}
-}
-
-func TestRollbackPendingRollback(t *testing.T) {
-	c, cfg := testClient(t, writeTinyChart(t))
-	ctx := t.Context()
-	const ns, name = testNamespace, "back"
-	deployedAt := time.Now().Add(-2 * time.Hour).UTC()
-	pendingAt := time.Now().Add(-30 * time.Minute).UTC()
-	storeRelease(t, cfg, storedRelease(name, 1, common.StatusDeployed, deployedAt, testLabels(name)))
-	storeRelease(t, cfg, storedRelease(name, 2, common.StatusPendingRollback, pendingAt, testLabels(name)))
-
-	if err := c.Rollback(ctx, ns, name, 1); err != nil {
-		t.Fatalf("rollback pending-rollback: %v", err)
-	}
-	got, err := c.Get(ctx, ns, name)
-	if err != nil || got == nil || got.Status != string(common.StatusDeployed) || got.Revision != 3 {
-		t.Fatalf("pending-rollback recovered = %#v, %v", got, err)
-	}
-}
-
-func testLabels(name string) map[string]string {
-	return map[string]string{
-		uidLabelKey:  testReleaseUID,
-		nameLabelKey: name,
-	}
-}
-
 func storeRelease(t *testing.T, cfg *action.Configuration, rel *releasev1.Release) {
 	t.Helper()
 	if err := cfg.Releases.Create(rel); err != nil {
@@ -271,5 +100,206 @@ func storedRelease(name string, rev int, status common.Status, updated time.Time
 			LastDeployed:  updated,
 			FirstDeployed: updated,
 		},
+	}
+}
+
+// clientCase is one client sequence. Seed times are offsets from a base
+// captured at the start, stored as base.Add(offset).UTC().
+// updatedAfterStart mirrors !Updated.Before(base.Add(-time.Second)).
+type clientCase struct {
+	Name         string        `json:"name,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	Namespace    string        `json:"namespace,omitempty"`
+	ChartRepo    string        `json:"chartRepo,omitempty"`
+	ChartName    string        `json:"chartName,omitempty"`
+	ChartVersion string        `json:"chartVersion,omitempty"`
+	Seed         []seedRelease `json:"seed,omitempty"`
+	Steps        []clientStep  `json:"steps"`
+}
+
+type seedRelease struct {
+	Name     string            `json:"name"`
+	Revision int               `json:"revision"`
+	Status   string            `json:"status"`
+	Updated  cases.Duration    `json:"updated"`
+	Labels   map[string]string `json:"labels,omitempty"`
+}
+
+type clientStep struct {
+	Op             string            `json:"op"`
+	Release        string            `json:"release"`
+	Values         map[string]any    `json:"values,omitempty"`
+	ForceConflicts bool              `json:"forceConflicts,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Revision       int               `json:"revision,omitempty"`
+	Absent         bool              `json:"absent,omitempty"`
+	Expect         *releaseExpect    `json:"expect,omitempty"`
+	History        []releaseExpect   `json:"history,omitempty"`
+}
+
+type releaseExpect struct {
+	Revision          *int              `json:"revision,omitempty"`
+	Status            string            `json:"status,omitempty"`
+	ChartName         string            `json:"chartName,omitempty"`
+	ChartVersion      string            `json:"chartVersion,omitempty"`
+	Config            map[string]string `json:"config,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Updated           *cases.Duration   `json:"updated,omitempty"`
+	UpdatedAfterStart bool              `json:"updatedAfterStart,omitempty"`
+}
+
+func TestGetInstallUpgradeUninstall(t *testing.T) {
+	cases.Run(t, "testdata/client/get-install-upgrade-uninstall", runClientCase)
+}
+
+func TestHistoryNewestFirstAndRollbackPendingUpgrade(t *testing.T) {
+	cases.Run(t, "testdata/client/history-newest-first", runClientCase)
+}
+
+func TestPendingInstallFailedAndAbsentHistory(t *testing.T) {
+	cases.Run(t, "testdata/client/pending-install-failed", runClientCase)
+}
+
+func TestRollbackPendingRollback(t *testing.T) {
+	cases.Run(t, "testdata/client/rollback-pending-rollback", runClientCase)
+}
+
+func runClientCase(t *testing.T, tc clientCase) {
+	t.Helper()
+	base := time.Now()
+	ns := tc.Namespace
+	if ns == "" {
+		ns = testNamespace
+	}
+	c, cfg := testClient(t, writeTinyChart(t))
+	for _, seed := range tc.Seed {
+		at := base.Add(seed.Updated.Std()).UTC()
+		rel := storedRelease(seed.Name, seed.Revision, common.Status(seed.Status), at, seed.Labels)
+		storeRelease(t, cfg, rel)
+	}
+	ref := ChartRef{Repo: tc.ChartRepo, Name: tc.ChartName, Version: tc.ChartVersion}
+	if ref.Repo == "" {
+		ref.Repo = testRepo
+	}
+	if ref.Name == "" {
+		ref.Name = tinyChartName
+	}
+	if ref.Version == "" {
+		ref.Version = tinyVersion
+	}
+	ctx := t.Context()
+	for _, step := range tc.Steps {
+		runClientStep(t, ctx, c, ns, ref, base, step)
+	}
+}
+
+func runClientStep(t *testing.T, ctx context.Context, c *Client, ns string, ref ChartRef, base time.Time, step clientStep) {
+	t.Helper()
+	if step.Release == "" {
+		t.Fatal("step has no release")
+	}
+	switch step.Op {
+	case "get":
+		got, err := c.Get(ctx, ns, step.Release)
+		if step.Absent {
+			if err != nil || got != nil {
+				t.Fatalf("absent get = %#v, %v", got, err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		checkRelease(t, "get", got, step.Expect, base)
+	case "install":
+		got, err := c.Install(ctx, ns, step.Release, ref, step.Values, ApplyOpts{
+			ForceConflicts: step.ForceConflicts,
+			Labels:         step.Labels,
+		})
+		if err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		checkRelease(t, "install", got, step.Expect, base)
+	case "upgrade":
+		got, err := c.Upgrade(ctx, ns, step.Release, ref, step.Values, ApplyOpts{
+			ForceConflicts: step.ForceConflicts,
+			Labels:         step.Labels,
+		})
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		checkRelease(t, "upgrade", got, step.Expect, base)
+	case "uninstall":
+		if err := c.Uninstall(ctx, ns, step.Release); err != nil {
+			t.Fatalf("uninstall: %v", err)
+		}
+	case "history":
+		hist, err := c.History(ctx, ns, step.Release)
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		if step.Absent {
+			if hist != nil {
+				t.Fatalf("absent history = %#v, %v", hist, err)
+			}
+			return
+		}
+		if len(hist) != len(step.History) {
+			t.Fatalf("history = %#v", hist)
+		}
+		for i := range step.History {
+			checkRelease(t, "history", &hist[i], &step.History[i], base)
+		}
+	case "rollback":
+		if step.Revision == 0 {
+			t.Fatal("rollback has no revision")
+		}
+		if err := c.Rollback(ctx, ns, step.Release, step.Revision); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+	default:
+		t.Fatalf("op %q", step.Op)
+	}
+}
+
+func checkRelease(t *testing.T, what string, rel *Release, exp *releaseExpect, base time.Time) {
+	t.Helper()
+	if rel == nil {
+		t.Fatalf("%s = nil", what)
+	}
+	if exp == nil {
+		t.Fatalf("%s has no expect", what)
+	}
+	if exp.Revision != nil && rel.Revision != *exp.Revision {
+		t.Fatalf("%s revision = %d, want %d", what, rel.Revision, *exp.Revision)
+	}
+	if exp.Status != "" && rel.Status != exp.Status {
+		t.Fatalf("%s status = %q, want %q", what, rel.Status, exp.Status)
+	}
+	if exp.ChartName != "" && rel.ChartName != exp.ChartName {
+		t.Fatalf("%s chart = %q, want %q", what, rel.ChartName, exp.ChartName)
+	}
+	if exp.ChartVersion != "" && rel.ChartVersion != exp.ChartVersion {
+		t.Fatalf("%s chart version = %q, want %q", what, rel.ChartVersion, exp.ChartVersion)
+	}
+	for k, want := range exp.Config {
+		got, ok := rel.Config[k].(string)
+		if !ok || got != want {
+			t.Fatalf("%s config[%s] = %#v, want %q", what, k, rel.Config[k], want)
+		}
+	}
+	for k, want := range exp.Labels {
+		if rel.Labels[k] != want {
+			t.Fatalf("%s label %s = %q, want %q", what, k, rel.Labels[k], want)
+		}
+	}
+	if exp.Updated != nil {
+		want := base.Add(exp.Updated.Std()).UTC()
+		if !rel.Updated.Equal(want) {
+			t.Fatalf("%s updated = %s, want %s", what, rel.Updated, want)
+		}
+	}
+	if exp.UpdatedAfterStart && rel.Updated.Before(base.Add(-time.Second)) {
+		t.Fatalf("%s updated = %s, want after %s", what, rel.Updated, base.Add(-time.Second))
 	}
 }

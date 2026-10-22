@@ -1,0 +1,11 @@
+"name": "should-default-metricprovider-to-prometheus-and-customprovider-path-to-decisions"
+"description": "should default metricProvider to Prometheus and customProvider.path to /decisions"
+"inputs":
+  "createBy": "creating a scaler that leaves both unset"
+  "switchBy": "switching it to the Custom provider without naming a path"
+  "query": "avg(x)"
+  "target": "1"
+  "serviceId": "fallback-modelforge-01"
+"expected":
+  "metricProvider": "Prometheus"
+  "path": "/decisions"

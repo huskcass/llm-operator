@@ -1,0 +1,25 @@
+# ceil(1 * 0.5/0.5) = 1, which is already spec, and the rollout is done, so no guard matches.
+"name": "should-clear-a-deferral-on-a-no-op-once-no-guard-matches"
+"description": "should clear a deferral on a no-op once no guard matches"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+  "rollout": true
+  "steps":
+  - "at": "0s"
+  - "by": "finishing the rollout at the replica count the metric already wants"
+    "at": "10s"
+    "metric": "0.5"
+    "observeSpec": 1
+"expected":
+  "steps":
+  - "deferredSince": "0s"
+  - "replicas": 1
+    "deferredSince": null
+    "applied": 1
+    "forcedWrite": false
+    "condition":
+      "status": "False"
+      "reason": "NotDeferred"
+      "messageContains":
+      - "already at the step target"

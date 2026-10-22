@@ -1,0 +1,22 @@
+"name": "should-never-force-a-deferral-when-defertimeoutseconds-is-0"
+"description": "should never force a deferral when deferTimeoutSeconds is 0"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 0
+  "rollout": true
+  "seedDeferredSince": "-24h"
+  "steps":
+  - "at": "0s"
+"expected":
+  "steps":
+  - "requeueAfter": "15s"
+    "replicas": 1
+    "deferredSince": "seed"
+    "condition":
+      "status": "True"
+      "reason": "RolloutInProgress"
+      "messageContains":
+      - "never forced (deferTimeoutSeconds is 0)"
+    "events":
+    - "prefix": "Normal ScalingDeferred"
+    "noMoreEvents": true

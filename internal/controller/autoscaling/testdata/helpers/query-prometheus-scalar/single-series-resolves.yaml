@@ -1,0 +1,6 @@
+"name": "single-series-resolves"
+"description": "single series resolves"
+"inputs":
+  "result": "[{\"metric\":{},\"value\":[0,\"1.5\"]}]"
+"expected":
+  "value": 1.5

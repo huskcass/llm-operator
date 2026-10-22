@@ -1,0 +1,41 @@
+"name": "should-force-the-next-stuck-scale-down-step-after-one-sync-period"
+"description": "should force the next stuck scale-down step after one sync period"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+    "syncPeriodSeconds": 15
+    "maxStepReplicas": 2
+  "prelude": "capping the step and parking 5 replicas with none ready"
+  "deploy":
+    "replicas": 5
+    "updated": 5
+    "ready": 0
+    "available": 0
+    "spec": 5
+  "metric": "0"
+  "steps":
+  - "at": "0s"
+  - "by": "forcing the first step once the timeout elapses"
+    "at": "60s"
+  - "by": "keeping the fleet unready and taking the next step one sync period later, without another timeout"
+    "at": "75s"
+    "observeSpec": 0
+"expected":
+  "steps":
+  - "replicas": 5
+    "deferredSince": "0s"
+    "condition":
+      "reason": "ScaleDownSettling"
+  - "replicas": 3
+    "deferredSince": "0s"
+    "forcedWrite": true
+    "forcedWriteAt": "60s"
+  - "replicas": 1
+    "deferredSince": "0s"
+    "applied": 1
+    "condition":
+      "status": "False"
+      "reason": "DeferralTimedOut"
+      "messageContains":
+      - "scaling 3 -> 1 anyway"
+      - "previous scale-down has not settled"

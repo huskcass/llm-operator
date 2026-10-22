@@ -1,0 +1,54 @@
+name: re-resolves-once-per-new-re-resolve-value
+description: re-resolves once per new re-resolve value
+steps:
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect: {}
+  - action: update
+    annotations:
+      serving.modelsphere.dev/re-resolve: "1"
+  - action: reconcile
+    expect:
+      chartVersion: "0.8.6"
+      reResolve: "1"
+      listCalls: 2
+      upgrades: 0
+  - action: setVersions
+    versions:
+      - "0.8.6"
+      - "0.9.0"
+  - action: reconcile
+    expect:
+      chartVersion: "0.8.6"
+      listCalls: 2
+  - action: setHelm
+    upgradeErr: boom
+  - action: update
+    annotations:
+      serving.modelsphere.dev/re-resolve: "2"
+  - action: reconcile
+    expect:
+      errorContains: boom
+      chartVersion: "0.8.6"
+      reResolve: "1"
+  - action: setHelm
+    upgradeErr: ""
+  - action: reconcile
+    expect:
+      chartVersion: "0.9.0"
+      reResolve: "2"
+      history:
+        entries:
+          - index: 0
+            reResolved: true
+      upgrades: 2
+  - action: setVersions
+    versions:
+      - "0.8.6"
+      - "0.9.0"
+      - "0.9.1"
+  - action: reconcile
+    expect:
+      chartVersion: "0.9.0"
+      upgrades: 2

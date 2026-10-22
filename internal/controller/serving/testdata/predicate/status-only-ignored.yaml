@@ -1,0 +1,5 @@
+name: status-only-ignored
+description: status-only ignored
+op: update
+phase: Applied
+want: false

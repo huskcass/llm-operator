@@ -1,0 +1,7 @@
+name: oci-ghcr-io-other-charts
+description: "oci://ghcr.io/other/charts"
+allowed:
+  - oci://ghcr.io/modelsphere
+  - https://modelsphere.github.io/helm-charts/
+repo: "oci://ghcr.io/other/charts"
+want: false

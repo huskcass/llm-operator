@@ -1,0 +1,8 @@
+"name": "a-negative-count-is-refused"
+"description": "a negative count is refused"
+"inputs":
+  "status": 200
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"serviceId\":\"svc\",\"replicas\":{\"active\":-1}}]}"
+"expected":
+  "errorContains": "out of range"

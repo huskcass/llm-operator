@@ -1,0 +1,10 @@
+description: upgrade refused when the chart becomes cluster-scoped
+steps:
+  - op: install
+  - write: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: escape
+  - op: upgrade
+    errorContains: cluster-scoped

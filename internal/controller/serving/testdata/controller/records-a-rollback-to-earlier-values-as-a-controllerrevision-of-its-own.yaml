@@ -1,0 +1,41 @@
+name: records-a-rollback-to-earlier-values-as-a-controllerrevision-of-its-own
+description: records a rollback to earlier values as a ControllerRevision of its own
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: update
+    layers:
+      - name: site
+        values: '{"replicaCount":2}'
+  - action: reconcile
+    expect: {}
+  - action: update
+    layers:
+      - name: site
+        values: '{"replicaCount":1}'
+    annotations:
+      swiss.modelsphere.dev/action: rollback
+      swiss.modelsphere.dev/plan-hash: p3
+  - action: reconcile
+    expect:
+      history:
+        length: 3
+        entries:
+          - index: 0
+            action: rollback
+            revision: 3
+            hashEqualsApplied: true
+            hashEqualsIndex: 2
+      distinctRevisions: 3
+      snapshots:
+        - index: 0
+          annotations:
+            swiss.modelsphere.dev/action: rollback
+        - index: 2
+          annotations:
+            swiss.modelsphere.dev/action: install
+  - action: reconcile
+    expect:
+      upgradesUnchanged: true

@@ -1,0 +1,14 @@
+"name": "a-decision-above-maxreplicas-is-clamped"
+"description": "a decision above maxReplicas is clamped"
+"inputs":
+  "active": "15"
+  "minReplicas": 1
+  "maxReplicas": 5
+  "readyReplicas": 8
+  "specReplicas": 8
+  "serviceId": "svc"
+  "namespace": "modelforge"
+  "apiVersion": "llmscaling.inference.x-k8s.io/v1alpha1"
+  "pinAPIVersion": true
+"expected":
+  "replicas": 5

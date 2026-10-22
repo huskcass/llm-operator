@@ -1,0 +1,7 @@
+description: missing index is reported by status
+calls:
+  - fn: versions
+    repoKind: https
+    repoPath: /charts
+    chart: sglang
+    errorExact: "{indexURL}: 404 Not Found -- the repository says: 404 page not found"

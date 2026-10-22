@@ -1,0 +1,22 @@
+# desired = ceil(1 * 0.85/0.5) = 2 against the single-replica baseline, not ceil(0 * 0.85/0.5) = 0.
+"name": "should-wake-the-fleet-from-zero-when-the-metric-turns-positive"
+"description": "should wake the fleet from zero when the metric turns positive"
+"inputs":
+  "plainReconciler": true
+  "prelude": "lowering the scaler's minReplicas to 0 and parking the Deployment at 0"
+  "spec":
+    "minReplicas": 0
+  "deploy":
+    "replicas": 0
+    "updated": 0
+    "ready": 0
+    "available": 0
+    "spec": 0
+  "steps":
+  - "by": "running the Reconciler"
+  - "by": "checking the fleet woke up"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 2

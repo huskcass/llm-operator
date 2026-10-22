@@ -1,0 +1,9 @@
+"name": "zero-sync-period"
+"description": "zero sync period"
+"inputs":
+  "recorded": true
+  "sync": "0s"
+  "at": "1h"
+"expected":
+  "allowed": true
+  "remaining": "0s"

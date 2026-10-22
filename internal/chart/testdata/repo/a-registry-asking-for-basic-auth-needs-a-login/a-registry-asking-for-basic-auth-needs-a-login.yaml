@@ -1,0 +1,14 @@
+description: basic challenge needs a login
+tls: true
+replaceClient: true
+routes:
+  - challenge: basic
+    realmName: harbor
+calls:
+  - fn: versions
+    repoKind: oci
+    repoPath: /org
+    chart: sglang
+    needsLogin: true
+    errorContains:
+      - "Basic auth"

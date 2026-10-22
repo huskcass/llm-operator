@@ -1,0 +1,14 @@
+name: replaces-its-own-stale-snapshot-under-a-reused-revision-name
+description: replaces its own stale snapshot under a reused revision name
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: plantStale
+  - action: reconcile
+    expect:
+      phase: Applied
+      plantedRevisionUsed: true
+      snapshots:
+        - index: 0
+          annotations:
+            swiss.modelsphere.dev/action: install

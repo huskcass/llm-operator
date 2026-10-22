@@ -1,0 +1,6 @@
+"name": "explicit-0"
+"description": "explicit 0"
+"inputs":
+  "deferTimeoutSeconds": 0
+"expected":
+  "duration": "0s"

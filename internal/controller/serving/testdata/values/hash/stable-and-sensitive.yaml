@@ -1,0 +1,32 @@
+name: stable-and-sensitive
+description: order-stable sha256 and sensitive to version and values
+checks:
+  - kind: stable
+    chart: sglang
+    version: "0.8.6"
+    prefix: "sha256:"
+    hashLen: 71
+    left:
+      b: 1
+      a:
+        d: 1
+        c: 2
+    right:
+      a:
+        c: 2
+        d: 1
+      b: 1
+  - kind: nilEqualsEmpty
+  - kind: version
+    chart: sglang
+    version: "0.8.7"
+    values:
+      b: 1
+      a:
+        d: 1
+        c: 2
+  - kind: values
+    chart: sglang
+    version: "0.8.6"
+    values:
+      b: 2

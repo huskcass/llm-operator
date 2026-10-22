@@ -1,0 +1,25 @@
+description: index lists sglang and reports a missing chart
+routes:
+  - path: /charts/index.yaml
+    body: |
+      apiVersion: v1
+      entries:
+        sglang:
+          - version: 0.8.0
+          - version: 0.7.1
+        vllm:
+          - version: 1.0.0
+calls:
+  - fn: versions
+    repoKind: https
+    repoPath: /charts/
+    chart: sglang
+    versions:
+      - "0.8.0"
+      - "0.7.1"
+  - fn: versions
+    repoKind: https
+    repoPath: /charts
+    chart: nope
+    errorContains:
+      - 'no chart "nope"'

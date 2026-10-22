@@ -1,0 +1,13 @@
+"name": "settle-no-op-is-not-held"
+"description": "settle: no-op is not held"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 2
+  "intent":
+    "from": 5
+    "to": 5
+"expected":
+  "held": false
+  "reason": "ScaleDownSettling"

@@ -1,0 +1,47 @@
+"name": "should-not-take-a-second-forced-step-until-a-sync-period-has-elapsed"
+"description": "should not take a second forced step until a sync period has elapsed"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+    "syncPeriodSeconds": 15
+    "maxStepReplicas": 2
+  "metric": "0"
+  "deploy":
+    "replicas": 5
+    "updated": 5
+    "ready": 0
+    "available": 0
+    "spec": 5
+  "steps":
+  - "by": "forcing one scale-down step of an unready fleet"
+    "at": "0s"
+    "snapshotStatus": true
+  - "at": "60s"
+  - "by": "putting the status back to its pre-write state, as if that update had conflicted"
+    "restoreStatus": true
+    "skipReconcile": true
+  - "by": "reconciling again with the clock unchanged, which must not take the next step"
+    "at": "60s"
+  - "by": "still holding one second short of the sync period"
+    "at": "74s"
+  - "by": "forcing the next step once the sync period has elapsed"
+    "at": "75s"
+"expected":
+  "steps":
+  - {}
+  - "replicas": 3
+  - {}
+  - "replicas": 3
+    "requeueAfter": "15s"
+    "deferredSince": "0s"
+    "applied": 3
+    "condition":
+      "status": "True"
+      "messageContains":
+      - "forced write paced to one per sync period"
+  - "replicas": 3
+    "requeueAfter": "1s"
+    "deferredSince": "0s"
+  - "replicas": 1
+    "deferredSince": "0s"
+    "applied": 1

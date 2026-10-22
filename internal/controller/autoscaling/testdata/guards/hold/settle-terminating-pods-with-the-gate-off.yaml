@@ -1,0 +1,15 @@
+"name": "settle-terminating-pods-with-the-gate-off"
+"description": "settle: terminating pods with the gate off"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 5
+    "terminating": 2
+    "terminatingReported": true
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "held": false
+  "reason": "ScaleDownSettling"

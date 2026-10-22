@@ -1,0 +1,9 @@
+"name": "pacing-under-the-1s-floor"
+"description": "pacing under the 1s floor"
+"inputs":
+  "holding": true
+  "timeout": "1m"
+  "until": "-1s"
+  "pacing": "100ms"
+"expected":
+  "after": "1s"

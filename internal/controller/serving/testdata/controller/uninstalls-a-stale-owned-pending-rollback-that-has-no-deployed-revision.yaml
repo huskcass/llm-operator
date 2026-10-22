@@ -1,0 +1,28 @@
+name: uninstalls-a-stale-owned-pending-rollback-that-has-no-deployed-revision
+description: uninstalls a stale owned pending-rollback that has no deployed revision
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: putRelease
+    release:
+      owned: true
+      revision: 2
+      status: pending-rollback
+      updated: "-1h"
+  - action: setHistory
+    entries:
+      - owned: true
+        revision: 1
+        status: failed
+        updated: "-2h"
+      - slot: true
+  - action: reconcile
+    expect:
+      rollbacks: 0
+      uninstalls: 1
+      installs: 1
+      upgrades: 0
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Installed

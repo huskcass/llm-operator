@@ -1,0 +1,5 @@
+name: deletion-timestamp
+description: deletion timestamp
+op: update
+deleting: true
+want: true

@@ -1,0 +1,8 @@
+"name": "not-holding-stays-on-sync-period"
+"description": "not holding stays on sync period"
+"inputs":
+  "holding": false
+  "timeout": "1m"
+  "until": "5s"
+"expected":
+  "after": "15s"

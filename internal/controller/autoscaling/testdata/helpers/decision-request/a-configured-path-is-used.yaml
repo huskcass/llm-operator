@@ -1,0 +1,12 @@
+"name": "a-configured-path-is-used"
+"description": "a configured path is used"
+"inputs":
+  "serviceId": "fallback-modelforge-01"
+  "path": "/v2/decisions"
+  "headers":
+    "Authorization": "Bearer t"
+"expected":
+  "replicas": 4
+  "path": "/v2/decisions"
+  "serviceId": "fallback-modelforge-01"
+  "authorization": "Bearer t"

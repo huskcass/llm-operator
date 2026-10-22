@@ -1,0 +1,13 @@
+"name": "a-path-without-a-leading-slash-still-forms-one"
+"description": "a path without a leading slash still forms one"
+"inputs":
+  "serviceId": "fallback-modelforge-01"
+  "path": "decisions"
+  "headers":
+    "Authorization": "Bearer t"
+"expected":
+  "replicas": 4
+  "path": "/decisions"
+  "serviceId": "fallback-modelforge-01"
+  "authorization": "Bearer t"
+  "pinDefaultPath": true

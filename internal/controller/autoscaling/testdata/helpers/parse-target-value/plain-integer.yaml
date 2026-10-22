@@ -1,0 +1,6 @@
+"name": "plain-integer"
+"description": "plain integer"
+"inputs":
+  "value": "5"
+"expected":
+  "value": 5

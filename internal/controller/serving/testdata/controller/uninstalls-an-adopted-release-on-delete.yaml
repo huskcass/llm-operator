@@ -1,0 +1,25 @@
+name: uninstalls-an-adopted-release-on-delete
+description: uninstalls an adopted release on delete
+steps:
+  - action: putRelease
+    release:
+      revision: 7
+      status: deployed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      config:
+        replicaCount: 1
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect:
+      conditions:
+        - type: Adopted
+          status: "True"
+      release:
+        labelsAbsent:
+          - serving.modelsphere.dev/llmservice-uid
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 1

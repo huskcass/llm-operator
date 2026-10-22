@@ -1,0 +1,14 @@
+"name": "a-trailing-slash-on-serveraddress-is-not-doubled"
+"description": "a trailing slash on serverAddress is not doubled"
+"inputs":
+  "serviceId": "fallback-modelforge-01"
+  "path": "/decisions"
+  "trailingSlash": true
+  "headers":
+    "Authorization": "Bearer t"
+"expected":
+  "replicas": 4
+  "path": "/decisions"
+  "serviceId": "fallback-modelforge-01"
+  "authorization": "Bearer t"
+  "pinDefaultPath": true

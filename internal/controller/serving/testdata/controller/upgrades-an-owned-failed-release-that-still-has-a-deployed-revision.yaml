@@ -1,0 +1,28 @@
+name: upgrades-an-owned-failed-release-that-still-has-a-deployed-revision
+description: upgrades an owned failed release that still has a deployed revision
+steps:
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: setHistory
+    entries:
+      - slot: true
+      - owned: true
+        revision: 2
+        status: failed
+        updated: "0s"
+    put: last
+  - action: update
+    layers:
+      - name: site
+        values: '{"replicaCount":2}'
+  - action: reconcile
+    expect:
+      upgrades: 1
+      uninstalls: 0
+      installs: 1
+      phase: Applied
+      conditions:
+        - type: Applied
+          reason: Upgraded

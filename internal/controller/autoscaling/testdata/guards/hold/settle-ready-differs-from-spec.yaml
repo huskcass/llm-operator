@@ -1,0 +1,14 @@
+"name": "settle-ready-differs-from-spec"
+"description": "settle: ready differs from spec"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 3
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "held": true
+  "reason": "ScaleDownSettling"
+  "why": "previous scale-down has not settled"

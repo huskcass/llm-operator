@@ -1,0 +1,8 @@
+description: running one out of range
+spec: ">=0.8.0"
+keep: "0.7.2"
+got: "0.9.0"
+list:
+  - "0.7.2"
+  - "0.8.0"
+  - "0.9.0"

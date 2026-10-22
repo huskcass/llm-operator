@@ -1,0 +1,15 @@
+# A ready count of 0 is the raw missing-field value. Treating it as spec would skip the guard.
+"name": "settle-ready-count-of-0-is-not-settled"
+"description": "settle: ready count of 0 is not settled"
+"inputs":
+  "guard": "settle"
+  "state":
+    "spec": 5
+    "ready": 0
+  "intent":
+    "from": 5
+    "to": 4
+"expected":
+  "held": true
+  "reason": "ScaleDownSettling"
+  "why": "previous scale-down has not settled"

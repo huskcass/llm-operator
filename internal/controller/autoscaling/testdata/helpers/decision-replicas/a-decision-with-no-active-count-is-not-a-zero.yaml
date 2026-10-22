@@ -1,0 +1,8 @@
+"name": "a-decision-with-no-active-count-is-not-a-zero"
+"description": "a decision with no active count is not a zero"
+"inputs":
+  "status": 200
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"modelforge\",\"serviceId\":\"svc\",\"replicas\":{}}]}"
+"expected":
+  "errorContains": "carries no replicas.active"

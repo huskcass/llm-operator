@@ -1,0 +1,16 @@
+"name": "enddeferral-and-forgetrecommendations-clear-the-forced-write-record"
+"description": "endDeferral and forgetRecommendations clear the forced-write record"
+"inputs":
+  "namespace": "ns"
+  "scaler": "s"
+  "at": "2026-03-01T00:00:00Z"
+  "steps":
+  - "op": "record"
+  - "op": "setSince"
+  - "op": "end"
+  - "op": "expectSinceCleared"
+  - "op": "expectRecordCleared"
+  - "op": "record"
+  - "op": "forget"
+  - "op": "expectRecordCleared"
+"expected": {}

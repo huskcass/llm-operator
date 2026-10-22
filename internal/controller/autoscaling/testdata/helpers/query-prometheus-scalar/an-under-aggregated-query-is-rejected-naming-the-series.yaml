@@ -1,0 +1,9 @@
+"name": "an-under-aggregated-query-is-rejected-naming-the-series"
+"description": "an under-aggregated query is rejected, naming the series"
+"inputs":
+  "result": |-
+    [{"metric":{"__name__":"m","model":"qwen","backend":"10.0.0.1:8000"},"value":[0,"1"]},
+                      {"metric":{"__name__":"m","model":"qwen","backend":"10.0.0.2:8000"},"value":[0,"9"]}]
+"expected":
+  "errorContains":
+  - "returned 2 series"

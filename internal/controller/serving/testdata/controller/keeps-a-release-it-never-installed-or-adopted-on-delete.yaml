@@ -1,0 +1,61 @@
+name: keeps-a-release-it-never-installed-or-adopted-on-delete
+description: keeps a release it never installed or adopted on delete
+steps:
+  - action: putRelease
+    release:
+      revision: 3
+      status: deployed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      config:
+        replicaCount: 9
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect:
+      conditions:
+        - type: Adopted
+          reason: Drift
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 0
+      release:
+        exists: true
+      notFound: true
+  - action: create
+    name: claimed
+    version: "0.8.6"
+    finalizers:
+      - serving.modelsphere.dev/finalizer
+  - action: setStatusReleaseUID
+  - action: putRelease
+    release:
+      revision: 1
+      status: deployed
+      chartName: sglang
+      chartVersion: "0.8.6"
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 0
+      release:
+        exists: true
+  - action: create
+    name: other
+    version: "0.8.6"
+    finalizers:
+      - serving.modelsphere.dev/finalizer
+  - action: putRelease
+    release:
+      revision: 2
+      status: deployed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      labels:
+        serving.modelsphere.dev/llmservice: other
+        serving.modelsphere.dev/llmservice-uid: some-other-uid
+  - action: delete
+  - action: reconcile
+    expect:
+      uninstalls: 0

@@ -1,0 +1,21 @@
+"name": "spec-replicas-of-0-is-kept"
+"description": "spec.replicas of 0 is kept"
+"inputs":
+  "kind": "Deployment"
+  "object":
+    "apiVersion": "apps/v1"
+    "kind": "Deployment"
+    "metadata":
+      "generation": 2
+    "spec":
+      "replicas": 0
+    "status":
+      "readyReplicas": 0
+      "replicas": 0
+      "updatedReplicas": 0
+      "observedGeneration": 2
+"expected":
+  "spec": 0
+  "generation": 2
+  "observedGeneration": 2
+  "tracksRollout": true

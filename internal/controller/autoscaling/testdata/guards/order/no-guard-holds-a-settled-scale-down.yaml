@@ -1,0 +1,15 @@
+"name": "no-guard-holds-a-settled-scale-down"
+"description": "no guard holds a settled scale-down"
+"inputs":
+  "state":
+    "spec": 5
+    "total": 5
+    "updated": 5
+    "ready": 5
+    "generation": 3
+    "observedGeneration": 3
+    "tracksRollout": true
+  "intent":
+    "from": 5
+    "to": 4
+"expected": {}

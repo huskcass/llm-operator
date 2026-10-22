@@ -1,0 +1,32 @@
+"name": "should-also-wait-for-the-drain-when-checkterminatingreplicas-is-on"
+"description": "should also wait for the drain when checkTerminatingReplicas is on"
+"inputs":
+  "plainReconciler": true
+  "checkTerminating": true
+  "metric": "0"
+  "steps":
+  - "by": "setting 5 ready with 2 still draining"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "spec": 5
+      "terminating": 2
+  - "by": "checking it is deferred; readyReplicas alone would have said settled"
+    "skipReconcile": true
+  - "by": "letting the drain finish"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 5
+      "available": 5
+      "terminating": 0
+  - "by": "checking the scale-down now proceeds"
+    "skipReconcile": true
+"expected":
+  "steps":
+  - {}
+  - "replicas": 5
+  - {}
+  - "replicas": 1

@@ -1,0 +1,8 @@
+"name": "deadline-later-than-sync-period"
+"description": "deadline later than sync period"
+"inputs":
+  "holding": true
+  "timeout": "1m"
+  "until": "30s"
+"expected":
+  "after": "15s"

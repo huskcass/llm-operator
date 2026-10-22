@@ -1,0 +1,12 @@
+name: nested
+description: nested maps merge recursively
+layers:
+  - name: a
+    values: '{"m":{"a":1,"b":{"c":1}}}'
+  - name: b
+    values: '{"m":{"b":{"d":2}}}'
+checks:
+  - path: ["m", "b", "c"]
+    equals: 1
+  - path: ["m", "b", "d"]
+    equals: 2

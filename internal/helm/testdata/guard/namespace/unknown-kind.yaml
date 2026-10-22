@@ -1,0 +1,7 @@
+description: unknown kind
+manifest: |
+  apiVersion: example.com/v1
+  kind: Widget
+  metadata:
+    name: a
+refused: cannot be told

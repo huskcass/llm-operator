@@ -1,0 +1,40 @@
+"name": "should-keep-one-deferral-when-the-guard-reason-changes"
+"description": "should keep one deferral when the guard reason changes"
+"inputs":
+  "spec":
+    "deferTimeoutSeconds": 60
+  "metric": "0"
+  "deploy":
+    "replicas": 5
+    "updated": 5
+    "ready": 3
+    "available": 3
+    "spec": 5
+  "rollout": true
+  "steps":
+  - "at": "0s"
+  - "by": "finishing the rollout while the fleet is still short of ready"
+    "at": "10s"
+    "deploy":
+      "replicas": 5
+      "updated": 5
+      "ready": 3
+      "available": 3
+  - "by": "not emitting again while the same guard still defers"
+    "at": "10s"
+"expected":
+  "steps":
+  - "deferredSince": "0s"
+    "condition":
+      "reason": "RolloutInProgress"
+  - "replicas": 5
+    "deferredSince": "0s"
+    "condition":
+      "reason": "ScaleDownSettling"
+    "events":
+    - "contains":
+      - "Deployment rollout in progress"
+    - "contains":
+      - "previous scale-down has not settled"
+  - "deferredSince": "0s"
+    "noMoreEvents": true

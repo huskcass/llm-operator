@@ -1,0 +1,28 @@
+name: does-not-adopt-a-release-that-is-not-deployed
+description: does not adopt a release that is not deployed
+steps:
+  - action: putRelease
+    release:
+      revision: 1
+      status: failed
+      chartName: sglang
+      chartVersion: "0.8.6"
+      config:
+        replicaCount: 1
+  - action: create
+    version: "0.8.6"
+  - action: reconcile
+    expect: {}
+  - action: reconcile
+    expect:
+      installs: 0
+      upgrades: 0
+      phase: Failed
+      message:
+        equals: release is failed, not deployed
+      observedGeneration: current
+      conditions:
+        - type: Adopted
+          status: "False"
+          reason: Drift
+      releaseUID: empty

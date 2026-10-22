@@ -1,0 +1,8 @@
+"name": "zero-is-a-decision-not-a-missing-one"
+"description": "zero is a decision, not a missing one"
+"inputs":
+  "status": 200
+  "serviceId": "svc"
+  "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"modelforge\",\"serviceId\":\"svc\",\"replicas\":{\"active\":0}}]}"
+"expected":
+  "replicas": 0

@@ -1,0 +1,10 @@
+# The multi-series error quotes both series with their labels sorted.
+"name": "multi-series-error-names-both-label-sets"
+"description": "multi-series error names both label sets"
+"inputs":
+  "result": "[\n\t\t\t{\"metric\":{\"model\":\"qwen\",\"backend\":\"10.0.0.1:8000\"},\"value\":[0,\"1\"]},\n\t\t\t{\"metric\":{\"model\":\"qwen\",\"backend\":\"10.0.0.2:8000\"},\"value\":[0,\"9\"]}]"
+"expected":
+  "errorContains":
+  - "{backend=\"10.0.0.1:8000\",model=\"qwen\"}"
+  - "{backend=\"10.0.0.2:8000\",model=\"qwen\"}"
+  - "avg(...)"

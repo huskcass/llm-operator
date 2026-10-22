@@ -1,0 +1,44 @@
+name: installs-and-records-a-controllerrevision
+description: installs and records a ControllerRevision
+steps:
+  - action: create
+    version: ">=0.8.0"
+  - action: reconcile
+    expect:
+      installs: 1
+      upgrades: 0
+      finalizer: present
+      phase: Applied
+      chartVersion: "0.8.6"
+      appliedHash:
+        prefix: "sha256:"
+      helmRevision: 1
+      observedGeneration: current
+      history:
+        length: 1
+        entries:
+          - index: 0
+            action: install
+            annotationsPresent:
+              - swiss.modelsphere.dev/note
+            annotationsAbsent:
+              - unrelated
+      conditions:
+        - type: Applied
+          status: "True"
+          reason: Installed
+      releaseUID: self
+      release:
+        labels:
+          serving.modelsphere.dev/llmservice-uid: self
+          serving.modelsphere.dev/llmservice: qwen
+      snapshots:
+        - index: 0
+          labels:
+            serving.modelsphere.dev/llmservice: qwen
+          controllerOwner: true
+          annotations:
+            swiss.modelsphere.dev/action: install
+          annotationsAbsent:
+            - unrelated
+          chartName: sglang

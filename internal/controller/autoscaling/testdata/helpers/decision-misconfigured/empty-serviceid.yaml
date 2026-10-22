@@ -1,0 +1,7 @@
+"name": "empty-serviceid"
+"description": "empty serviceId"
+"inputs":
+  "serverAddress": "http://example.invalid"
+  "serviceId": ""
+"expected":
+  "errorContains": "serviceId"

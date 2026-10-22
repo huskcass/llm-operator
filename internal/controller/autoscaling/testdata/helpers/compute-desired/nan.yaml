@@ -1,0 +1,9 @@
+"name": "nan"
+"description": "NaN"
+"inputs":
+  "sample": "NaN"
+  "ready": 4
+  "metricName": "guardrail"
+  "query": "histogram_quantile(0.95, x)"
+  "target": "2"
+"expected": {}

@@ -1,0 +1,6 @@
+"name": "percent-suffix-is-rejected-not-stripped"
+"description": "percent suffix is rejected, not stripped"
+"inputs":
+  "value": "80%"
+"expected":
+  "error": true

@@ -1,0 +1,8 @@
+"name": "just-recorded"
+"description": "just recorded"
+"inputs":
+  "recorded": true
+  "sync": "15s"
+  "at": "0s"
+"expected":
+  "allowed": false
