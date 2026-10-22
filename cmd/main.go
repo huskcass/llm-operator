@@ -203,8 +203,9 @@ func main() {
 	}
 
 	if err := (&scalecontroller.LLMScalerReconciler{
-		Client: client.WithFieldOwner(mgr.GetClient(), common.ControllerName),
-		Scheme: mgr.GetScheme(),
+		Client:   client.WithFieldOwner(mgr.GetClient(), common.ControllerName),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("llmscaler"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "llmscaler")
 		os.Exit(1)
