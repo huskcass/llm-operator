@@ -331,6 +331,10 @@ func TestQueryPrometheusScalar(t *testing.T) {
 			t.Fatalf("expected error containing %q, got value %v", tc.Expected.ErrorContains, got)
 		}
 		for _, want := range tc.Expected.ErrorContains {
+			// An empty substring matches every error.
+			if want == "" {
+				t.Fatal("errorContains entry is empty")
+			}
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error = %q, want it to contain %q", err, want)
 			}

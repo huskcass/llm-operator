@@ -71,17 +71,19 @@ func TestQueryDecisionReplicasSamplePayload(t *testing.T) {
 
 func assertDecision(t *testing.T, tc decisionFile) {
 	t.Helper()
-	status := tc.Inputs.Status
-	if status == 0 {
-		status = http.StatusOK
+	// Zero is an omitted status, not HTTP 200. WriteHeader panics on it.
+	if tc.Inputs.Status < 100 || tc.Inputs.Status > 999 {
+		t.Fatalf("status is required, got %d", tc.Inputs.Status)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
+		w.WriteHeader(tc.Inputs.Status)
 		_, _ = w.Write([]byte(tc.Inputs.Body))
 	}))
 	defer srv.Close()
 
 	got, err := queryDecisionReplicas(srv.URL, "", tc.Inputs.ServiceID, tc.Inputs.Namespace, nil)
+	// An empty errorContains means the call succeeds. A case that expects a
+	// failure names the substring; an empty string would match every error.
 	if tc.Expected.ErrorContains == "" {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -171,6 +173,14 @@ type decisionNon200File struct {
 // when its body happens to be a well-formed decision payload.
 func TestQueryDecisionReplicasNon200(t *testing.T) {
 	cases.Run(t, "testdata/helpers/decision-non-200", func(t *testing.T, tc decisionNon200File) {
+		// Zero is an omitted status, and WriteHeader panics on it.
+		if tc.Inputs.Status < 100 || tc.Inputs.Status > 999 {
+			t.Fatalf("status is required, got %d", tc.Inputs.Status)
+		}
+		// An empty substring matches every error.
+		if tc.Expected.ErrorContains == "" {
+			t.Fatal("errorContains is required")
+		}
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(tc.Inputs.Status)
 			_, _ = w.Write([]byte(tc.Inputs.Body))
@@ -201,6 +211,10 @@ type decisionMisconfigFile struct {
 // error names the field rather than the URL.
 func TestQueryDecisionReplicasMisconfigured(t *testing.T) {
 	cases.Run(t, "testdata/helpers/decision-misconfigured", func(t *testing.T, tc decisionMisconfigFile) {
+		// An empty substring matches every error.
+		if tc.Expected.ErrorContains == "" {
+			t.Fatal("errorContains is required")
+		}
 		_, err := queryDecisionReplicas(tc.Inputs.ServerAddress, "", tc.Inputs.ServiceID, "", nil)
 		if err == nil || !strings.Contains(err.Error(), tc.Expected.ErrorContains) {
 			t.Errorf("error = %v, want it to contain %q", err, tc.Expected.ErrorContains)

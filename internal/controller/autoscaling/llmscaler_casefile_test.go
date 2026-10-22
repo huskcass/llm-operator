@@ -322,6 +322,10 @@ func runCustomAdmissionFile(c customAdmissionFile) {
 	if c.Inputs.PinProvider && c.Inputs.MetricProvider != autoscalingv1alpha1.MetricProviderPrometheus {
 		Fail(fmt.Sprintf("metricProvider %q, want %q", c.Inputs.MetricProvider, autoscalingv1alpha1.MetricProviderPrometheus))
 	}
+	// An empty substring matches every error.
+	if c.Expected.ErrorContains == "" {
+		Fail(c.Description + ": errorContains is required")
+	}
 	runCustomProviderAdmission(customAdmissionCase{
 		metricProvider:     c.Inputs.MetricProvider,
 		omitCustomProvider: c.Inputs.OmitCustomProvider,

@@ -83,17 +83,6 @@ func TestRunUsesDescription(t *testing.T) {
 	}
 }
 
-func TestEntriesFollowsDescription(t *testing.T) {
-	entries := Entries("testdata/ok", func(s sample) string { return s.Description })
-	if len(entries) != 2 {
-		t.Fatalf("got %d entries", len(entries))
-	}
-	entries = Entries[sample]("testdata/ok", nil)
-	if len(entries) != 2 {
-		t.Fatalf("nil description: got %d entries", len(entries))
-	}
-}
-
 func TestRejectsBadDocuments(t *testing.T) {
 	checks := []struct {
 		dir  string
@@ -131,6 +120,145 @@ func TestMustLoadPanics(t *testing.T) {
 		}
 	}()
 	MustLoad[sample](filepath.Join(t.TempDir(), "absent"))
+}
+
+func TestRejectsDocumentsThatAreNotOneMapping(t *testing.T) {
+	checks := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty.yaml", "", "no document"},
+		{"comment.yaml", "# nothing to run\n", "no document"},
+		{"blank.yaml", "\n\n", "no document"},
+		{"null.yaml", "null\n", "document is null"},
+		{"tilde.yaml", "~\n", "document is null"},
+		{"sep.yaml", "---\n", "document is null"},
+		{"seq.yaml", "[]\n", "must be a mapping"},
+		{"multi.yaml", "name: multi\ninputs:\n  value: 1\nexpected:\n  value: 1\n---\nother: 2\n", "2 documents"},
+		{"later.yaml", "name: later\ninputs:\n  value: 1\nexpected:\n  value: 1\n---\nbogus: 2\n", "2 documents"},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeYAML(t, tc.name, tc.body)
+			_, err := Load[sample](dir)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("got %v, want it to name %s and contain %q", err, tc.name, tc.want)
+			}
+		})
+	}
+}
+
+func TestLeadingSeparatorIsOneDocument(t *testing.T) {
+	dir := writeYAML(t, "lead.yaml", "---\nname: lead\ninputs:\n  value: 3\nexpected:\n  value: 3\n")
+	got, err := Load[sample](dir)
+	if err != nil || len(got) != 1 || got[0].Inputs.Value != 3 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestEmptyMappingIsOneDocument(t *testing.T) {
+	dir := writeYAML(t, "empty-map.yaml", "{}\n")
+	got, err := Load[sample](dir)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestRejectsYMLExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kept.yaml"), []byte("name: kept\ninputs:\n  value: 1\nexpected:\n  value: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skipped.yml"), []byte("name: skipped\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load[sample](dir)
+	if err == nil || !strings.Contains(err.Error(), "skipped.yml") || !strings.Contains(err.Error(), ".yml") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRejectsCaseMismatchedKey(t *testing.T) {
+	body := "name: case\ninputs:\n  Value: 1\nexpected:\n  value: 1\n"
+	dir := writeYAML(t, "case.yaml", body)
+	_, err := Load[sample](dir)
+	if err == nil || !strings.Contains(err.Error(), "case.yaml") || !strings.Contains(err.Error(), "Value") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRejectsCaseMismatchInSliceAndMap(t *testing.T) {
+	dir := writeYAML(t, "slice.yaml", "items:\n  - Kind: pod\n")
+	if _, err := Load[nest](dir); err == nil || !strings.Contains(err.Error(), "Kind") {
+		t.Fatalf("slice: %v", err)
+	}
+	dir = writeYAML(t, "map.yaml", "bags:\n  x:\n    N: 1\n")
+	if _, err := Load[nest](dir); err == nil || !strings.Contains(err.Error(), "N") {
+		t.Fatalf("map: %v", err)
+	}
+	// "n" is quoted: an unquoted n is a YAML 1.1 boolean, not a key.
+	dir = writeYAML(t, "ok.yaml", "items:\n  - kind: pod\nbags:\n  x:\n    \"n\": 1\n")
+	got, err := Load[nest](dir)
+	if err != nil || len(got) != 1 || got[0].Items[0].Kind != "pod" || got[0].Bags["x"].N != 1 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestNonPointerDurationRejectsNull(t *testing.T) {
+	dir := writeYAML(t, "wait.yaml", "name: wait\ninputs:\n  value: 1\n  wait: null\nexpected:\n  value: 1\n")
+	_, err := Load[sample](dir)
+	if err == nil || !strings.Contains(err.Error(), "wait.yaml") || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("got %v", err)
+	}
+	dir = writeYAML(t, "zero.yaml", "name: zero\ninputs:\n  value: 1\n  wait: \"0s\"\nexpected:\n  value: 1\n")
+	got, err := Load[sample](dir)
+	if err != nil || got[0].Inputs.Wait.Std() != 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	dir = writeYAML(t, "bare.yaml", "name: bare\ninputs:\n  value: 1\n  wait: 0\nexpected:\n  value: 1\n")
+	if _, err := Load[sample](dir); err == nil {
+		t.Fatal("bare 0 decoded as a duration")
+	}
+}
+
+func TestPromotedEmbeddedFieldsAreCaseSensitive(t *testing.T) {
+	dir := writeYAML(t, "ok.yaml", "a: 1\nb: 2\n")
+	got, err := Load[outer](dir)
+	if err != nil || got[0].A != 1 || got[0].B != 2 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	dir = writeYAML(t, "bad.yaml", "A: 1\nb: 2\n")
+	if _, err := Load[outer](dir); err == nil || !strings.Contains(err.Error(), "A") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type nest struct {
+	Items []struct {
+		Kind string `json:"kind"`
+	} `json:"items"`
+	Bags map[string]struct {
+		N int `json:"n"`
+	} `json:"bags"`
+}
+
+type inner struct {
+	A int `json:"a"`
+}
+
+type outer struct {
+	inner
+	B int `json:"b"`
+}
+
+func writeYAML(t *testing.T, name, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestUnreadableFileFails(t *testing.T) {

@@ -1,6 +1,7 @@
 "name": "a-matching-decision-resolves-to-its-active-count"
 "description": "a matching decision resolves to its active count"
 "inputs":
+  "status": 200
   "serviceId": "svc"
   "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"modelforge\",\"serviceId\":\"svc\",\"replicas\":{\"active\":15}}]}"
 "expected":

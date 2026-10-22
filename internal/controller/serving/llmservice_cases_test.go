@@ -57,7 +57,6 @@ type serviceStep struct {
 	Name           string            `json:"name,omitempty"`
 	Version        string            `json:"version,omitempty"`
 	Annotations    map[string]string `json:"annotations,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
 	Finalizers     []string          `json:"finalizers,omitempty"`
 	ChartVersion   *string           `json:"chartVersion,omitempty"`
 	Suspend        *bool             `json:"suspend,omitempty"`
@@ -214,7 +213,6 @@ type caseRun struct {
 	capturedRevision   string
 	appliedHash        string
 	observedGeneration int64
-	generation         int64
 	planted            string
 }
 
@@ -275,6 +273,10 @@ func (c *caseRun) step(i int, step serviceStep) {
 	case "setHelm":
 		c.setHelm(step)
 	case "setAllowed":
+		// An omitted list is nil, and a nil allowlist permits every repository.
+		if step.Repos == nil {
+			Fail(fmt.Sprintf("%s: step %d setAllowed requires repos", c.tc.Name, i+1))
+		}
 		c.r.AllowedChartRepos = append([]string(nil), step.Repos...)
 	case "deleteRelease":
 		delete(c.h.releases, c.h.slot(c.ns, c.name))
@@ -319,12 +321,6 @@ func (c *caseRun) update(step serviceStep) {
 			obj.Annotations = map[string]string{}
 		}
 		maps.Copy(obj.Annotations, step.Annotations)
-	}
-	if step.Labels != nil {
-		if obj.Labels == nil {
-			obj.Labels = map[string]string{}
-		}
-		maps.Copy(obj.Labels, step.Labels)
 	}
 	if step.ChartVersion != nil {
 		obj.Spec.Chart.Version = *step.ChartVersion
@@ -509,8 +505,6 @@ func (c *caseRun) capture(step serviceStep) {
 	obj := fetch(c.ns, c.name)
 	for _, what := range step.Capture {
 		switch what {
-		case "generation":
-			c.generation = obj.Generation
 		case "observedGeneration":
 			c.observedGeneration = obj.Status.ObservedGeneration
 		case "appliedHash":
@@ -707,8 +701,6 @@ func (c *caseRun) checkGeneration(exp *expectSpec, got *servingv1alpha1.LLMServi
 		Expect(got.Status.ObservedGeneration).To(Equal(c.observedGeneration))
 	case "nonzero":
 		Expect(got.Status.ObservedGeneration).NotTo(BeZero())
-	case "generation":
-		Expect(got.Generation).To(Equal(c.generation))
 	default:
 		Fail("unsupported observedGeneration " + exp.ObservedGeneration)
 	}
@@ -769,6 +761,16 @@ func (c *caseRun) checkConditions(conds []conditionSpec, got *servingv1alpha1.LL
 		if want.Reason != "" {
 			Expect(gotCond.Reason).To(Equal(want.Reason))
 		}
+		if want.Message != "" {
+			Expect(gotCond.Message).To(Equal(want.Message))
+		}
+		switch want.ObservedGeneration {
+		case "":
+		case "current":
+			Expect(gotCond.ObservedGeneration).To(Equal(got.Generation))
+		default:
+			Fail("unsupported observedGeneration " + want.ObservedGeneration)
+		}
 	}
 }
 
@@ -791,10 +793,17 @@ func (c *caseRun) checkMessage(exp *messageExpect, got *servingv1alpha1.LLMServi
 	if exp.Equals != "" {
 		Expect(got.Status.Message).To(Equal(exp.Equals))
 	}
+	// An empty substring matches every message, so it is rejected on its own.
 	for _, sub := range exp.Contains {
+		if sub == "" {
+			Fail("message.contains entry is empty")
+		}
 		Expect(got.Status.Message).To(ContainSubstring(sub))
 	}
 	for _, sub := range exp.NotContains {
+		if sub == "" {
+			Fail("message.notContains entry is empty")
+		}
 		Expect(got.Status.Message).NotTo(ContainSubstring(sub))
 	}
 }

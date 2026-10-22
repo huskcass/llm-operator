@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 
 	"github.com/modelsphere/llm-operator/internal/testutil/cases"
+	"github.com/modelsphere/llm-operator/internal/testutil/cases/ginkgocases"
 )
 
 // The reconcile specs are one YAML file each under testdata/controller.
@@ -37,19 +38,19 @@ var _ = Describe("LLMScaler Controller", func() {
 		})
 
 		DescribeTable("metric scaling", runScalerCase,
-			cases.Entries("testdata/controller/metric-scaling", scalerDesc))
+			ginkgocases.Entries("testdata/controller/metric-scaling", scalerDesc))
 		DescribeTable("rollout guard (G8)", runScalerCase,
-			cases.Entries("testdata/controller/rollout-guard", scalerDesc))
+			ginkgocases.Entries("testdata/controller/rollout-guard", scalerDesc))
 		DescribeTable("settle guard (G7)", runScalerCase,
-			cases.Entries("testdata/controller/settle-guard", scalerDesc))
+			ginkgocases.Entries("testdata/controller/settle-guard", scalerDesc))
 		DescribeTable("stabilization and max step", runScalerCase,
-			cases.Entries("testdata/controller/stabilization-and-step", scalerDesc))
+			ginkgocases.Entries("testdata/controller/stabilization-and-step", scalerDesc))
 		DescribeTable("deferral timeout", runScalerCase,
-			cases.Entries("testdata/controller/deferral-timeout", scalerDesc))
+			ginkgocases.Entries("testdata/controller/deferral-timeout", scalerDesc))
 		DescribeTable("deferral status", runScalerCase,
-			cases.Entries("testdata/controller/deferral-status", scalerDesc))
+			ginkgocases.Entries("testdata/controller/deferral-status", scalerDesc))
 		DescribeTable("forced-write pacing", runScalerCase,
-			cases.Entries("testdata/controller/forced-write-pacing", scalerDesc))
+			ginkgocases.Entries("testdata/controller/forced-write-pacing", scalerDesc))
 
 		for _, f := range cases.MustLoad[deferDefaultFile]("testdata/controller/crd-default") {
 			tc := f.Case
@@ -69,9 +70,9 @@ var _ = Describe("LLMScaler Controller", func() {
 		})
 
 		DescribeTable("decision server", runCustomReconcileFile,
-			cases.Entries("testdata/controller/custom-reconcile", customReconcileDesc))
+			ginkgocases.Entries("testdata/controller/custom-reconcile", customReconcileDesc))
 		DescribeTable("admission", runCustomAdmissionFile,
-			cases.Entries("testdata/controller/custom-admission", customAdmissionDesc))
+			ginkgocases.Entries("testdata/controller/custom-admission", customAdmissionDesc))
 
 		for _, f := range cases.MustLoad[customDefaultFile]("testdata/controller/custom-defaults") {
 			tc := f.Case

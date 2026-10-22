@@ -627,7 +627,11 @@ func assertCondition(scaler *autoscalingv1alpha1.LLMScaler, exp condExpect) {
 	if exp.reason != "" {
 		Expect(cond.Reason).To(Equal(exp.reason))
 	}
+	// An empty substring matches every message, so it is rejected on its own.
 	for _, sub := range exp.messageContains {
+		if sub == "" {
+			Fail("messageContains entry is empty")
+		}
 		Expect(cond.Message).To(ContainSubstring(sub))
 	}
 	if exp.observedGenerationCurrent {
@@ -641,6 +645,12 @@ func assertEvents(run *scenarioRun, exp stepExpect) {
 	}
 	Expect(run.rec).NotTo(BeNil())
 	for _, want := range exp.events {
+		// An empty substring matches every event, so it is rejected on its own.
+		for _, sub := range want.contains {
+			if sub == "" {
+				Fail("events.contains entry is empty")
+			}
+		}
 		var got string
 		Expect(run.rec.Events).To(Receive(&got))
 		if want.prefix != "" {

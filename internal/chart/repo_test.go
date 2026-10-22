@@ -200,20 +200,40 @@ func runChartCall(t *testing.T, srv *httptest.Server, serverURL, basic string, c
 				t.Errorf("got %v", err)
 			}
 		}
-		for _, sub := range call.ErrorContains {
-			want := subst(sub, serverURL, repo, indexURL, callBasic)
-			if err == nil || !strings.Contains(err.Error(), want) {
-				t.Errorf("%q does not say %q", err, want)
-			}
-		}
-		for _, sub := range call.ErrorNotContains {
-			want := subst(sub, serverURL, repo, indexURL, callBasic)
-			if err != nil && strings.Contains(err.Error(), want) {
-				t.Errorf("%q names the token endpoint rather than the repository", err)
-			}
-		}
+		checkContained(t, err, call.ErrorContains, serverURL, repo, indexURL, callBasic)
+		checkAbsent(t, err, call.ErrorNotContains, serverURL, repo, indexURL, callBasic)
 	default:
 		t.Fatal("call has no expectation")
+	}
+}
+
+// checkContained fails when err does not include every substring.
+// An empty substring matches every error, so it is rejected on its own.
+func checkContained(t *testing.T, err error, subs []string, serverURL, repo, indexURL, callBasic string) {
+	t.Helper()
+	for _, sub := range subs {
+		if sub == "" {
+			t.Fatal("errorContains entry is empty")
+		}
+		want := subst(sub, serverURL, repo, indexURL, callBasic)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+}
+
+// checkAbsent fails when err includes a substring that must stay out of it.
+// An empty substring matches every error, so it is rejected on its own.
+func checkAbsent(t *testing.T, err error, subs []string, serverURL, repo, indexURL, callBasic string) {
+	t.Helper()
+	for _, sub := range subs {
+		if sub == "" {
+			t.Fatal("errorNotContains entry is empty")
+		}
+		want := subst(sub, serverURL, repo, indexURL, callBasic)
+		if err != nil && strings.Contains(err.Error(), want) {
+			t.Errorf("%q names the token endpoint rather than the repository", err)
+		}
 	}
 }
 

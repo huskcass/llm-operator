@@ -1,6 +1,7 @@
 "name": "an-unknown-schema-is-refused-not-parsed-hopefully"
 "description": "an unknown schema is refused, not parsed hopefully"
 "inputs":
+  "status": 200
   "serviceId": "svc"
   "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v2\",\"decisions\":[{\"serviceId\":\"svc\",\"replicas\":{\"active\":3}}]}"
 "expected":

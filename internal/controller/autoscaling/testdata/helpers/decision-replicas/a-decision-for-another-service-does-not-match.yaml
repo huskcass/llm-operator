@@ -2,6 +2,7 @@
 "name": "a-decision-for-another-service-does-not-match"
 "description": "a decision for another service does not match"
 "inputs":
+  "status": 200
   "serviceId": "svc"
   "body": "{\"apiVersion\":\"llmscaling.inference.x-k8s.io/v1alpha1\",\"decisions\":[{\"namespace\":\"modelforge\",\"serviceId\":\"other\",\"replicas\":{\"active\":9}}]}"
 "expected":

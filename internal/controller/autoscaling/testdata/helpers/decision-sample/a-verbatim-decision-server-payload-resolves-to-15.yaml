@@ -2,6 +2,7 @@
 "name": "a-verbatim-decision-server-payload-resolves-to-15"
 "description": "a verbatim decision-server payload resolves to 15"
 "inputs":
+  "status": 200
   "serviceId": "fallback-modelforge-01"
   "body": |-
     {
