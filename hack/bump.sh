@@ -67,9 +67,16 @@ mv "$tmp" "$chart"
 sed -E "s#^(IMG \?= .*):[^:/]+\$#\1:$next#" Makefile > "$tmp"
 mv "$tmp" Makefile
 
+# --force is what refreshes manager.image.tag in values.yaml, but it also
+# rewrites the scaffolded test-chart workflow and drops the actions.lock pins.
+wf=.github/workflows/test-chart.yml
+cp "$wf" "$tmp"
+
 # An exported IMG would outrank the Makefile default and stamp the wrong tag.
 unset IMG
-if ! out="$(kubebuilder edit --plugins=helm/v2-alpha --force 2>&1)"; then
+out="$(kubebuilder edit --plugins=helm/v2-alpha --force 2>&1)" && ok=true || ok=false
+mv "$tmp" "$wf"
+if ! $ok; then
   echo "$out" >&2
   echo "regeneration failed" >&2
   exit 1
