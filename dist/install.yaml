@@ -1259,7 +1259,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: 4pdosc/llm-operator:0.5.0
+        image: 4pdosc/llm-operator:0.5.1
         livenessProbe:
           httpGet:
             path: /healthz

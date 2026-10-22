@@ -2,7 +2,7 @@
 # Defaults to the public image on Docker Hub. Override it to build and push your
 # own:
 #   make docker-build docker-push IMG=<registry>/llm-operator:<tag>
-IMG ?= 4pdosc/llm-operator:0.5.0
+IMG ?= 4pdosc/llm-operator:0.5.1
 export IMG
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)

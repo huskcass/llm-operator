@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: 4pdosc/llm-operator
-  newTag: 0.5.0
+  newTag: 0.5.1
