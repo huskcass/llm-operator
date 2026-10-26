@@ -1,0 +1,64 @@
+# A normal write lands first. An apiVersion with more than one slash does not
+# parse, so the next sync records InvalidSpec on AbleToScale and leaves the
+# replica counts, lastScaleTime, and ScalingActive alone.
+"name": "should-report-invalid-spec-when-targetref-apiversion-does-not-parse"
+"description": "should report InvalidSpec when targetRef.apiVersion does not parse"
+"inputs":
+  "steps":
+  - "by": "scaling once so status is populated"
+    "at": "0s"
+  - "by": "setting an apiVersion that does not parse"
+    "at": "5s"
+    "apiVersion": "apps/v1/extra"
+"expected":
+  "steps":
+  - "replicas": 2
+    "desired": 2
+    "applied": 2
+    "current": 1
+    "condition":
+      "status": "True"
+      "reason": "Synced"
+      "messageContains":
+      - "scaled 1 -> 2"
+    "decision":
+      "status": "True"
+      "reason": "MetricsAvailable"
+      "messageContains":
+      - "evaluated 1 of 1 metrics"
+      - "recommends 2 replicas"
+      "observedGenerationCurrent": true
+    "limited":
+      "status": "False"
+      "reason": "DesiredWithinRange"
+      "messageContains":
+      - "the desired count is within the acceptable range"
+      "observedGenerationCurrent": true
+    "lastScaleTime": "set"
+    "observedGenerationCurrent": true
+  - "replicas": 2
+    "desired": 2
+    "applied": 2
+    "current": 1
+    "requeueAfter": "0s"
+    "condition":
+      "status": "False"
+      "reason": "InvalidSpec"
+      "messageContains":
+      - "apps/v1/extra"
+      "observedGenerationCurrent": true
+    "decision":
+      "status": "True"
+      "reason": "MetricsAvailable"
+      "messageContains":
+      - "evaluated 1 of 1 metrics"
+      - "recommends 2 replicas"
+      "observedGenerationStale": true
+    "limited":
+      "status": "False"
+      "reason": "DesiredWithinRange"
+      "messageContains":
+      - "the desired count is within the acceptable range"
+      "observedGenerationStale": true
+    "lastScaleTime": "unchanged"
+    "observedGenerationCurrent": true

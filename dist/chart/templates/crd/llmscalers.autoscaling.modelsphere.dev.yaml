@@ -34,9 +34,19 @@ spec:
       jsonPath: .status.desiredReplicas
       name: DesiredReplicas
       type: integer
-    - description: Whether a scale action is currently deferred
-      jsonPath: .status.conditions[?(@.type=="ScalingDeferred")].status
-      name: Deferred
+    - description: Whether a usable scaling signal was received
+      jsonPath: .status.conditions[?(@.type=="ScalingActive")].status
+      name: Active
+      type: string
+    - description: Whether this sync could scale the target
+      jsonPath: .status.conditions[?(@.type=="AbleToScale")].status
+      name: AbleToScale
+      type: string
+    - description: 'The AbleToScale reason: Synced, a guard hold (RolloutInProgress,
+        ScaleDownSettling), DeferralTimedOut, ScaleDownStabilized while the stabilization
+        window keeps the count, or a failure'
+      jsonPath: .status.conditions[?(@.type=="AbleToScale")].reason
+      name: Scaling
       type: string
     name: v1alpha1
     schema:
@@ -153,7 +163,7 @@ spec:
                         aggregate away every label the source varies on (backend, model, route,
                         pod). A query that errors, returns no data, or returns NaN/Inf is skipped
                         for that sync rather than read as zero; if every metric is skipped the
-                        replica count is held where it is.
+                        replica count is held at spec.replicas, apart from the min/max bounds.
                       type: string
                     target:
                       description: |-
@@ -314,8 +324,10 @@ spec:
                 format: int32
                 type: integer
               conditions:
-                description: conditions represent the current state of the LLMScaler
-                  resource.
+                description: |-
+                  conditions represent the current state of the LLMScaler resource:
+                  AbleToScale, ScalingActive, and ScalingLimited. DecisionAvailable is
+                  deprecated and mirrors ScalingActive.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -393,6 +405,21 @@ spec:
                 description: desiredReplicas is the desired number of replicas of
                   pods managed by this autoscaler
                 format: int32
+                type: integer
+              lastScaleTime:
+                description: |-
+                  lastScaleTime is when the controller last successfully wrote
+                  spec.replicas on the target, taken from the reconciler clock. It is set
+                  on a normal write and on a write forced after the deferral timeout, and
+                  left unchanged on every other sync: a no-op, a deferral, pacing, or an
+                  error.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed by the
+                  controller. It is set to metadata.generation on every status write.
+                format: int64
                 type: integer
             type: object
         required:

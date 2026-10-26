@@ -1,0 +1,31 @@
+# ceil(1 * 0.5/0.5) = 1, which is already spec, and the deployment is fully rolled out.
+"name": "should-report-scaling-active-on-a-no-op-without-a-lastscaletime"
+"description": "should report ScalingActive on a no-op without a lastScaleTime"
+"inputs":
+  "metric": "0.5"
+  "steps":
+  - "by": "reconciling a fleet that is already at the step target"
+    "at": "0s"
+"expected":
+  "steps":
+  - "replicas": 1
+    "desired": 1
+    "applied": 1
+    "current": 1
+    "deferredSince": null
+    "requeueAfter": "15s"
+    "condition":
+      "status": "True"
+      "reason": "Synced"
+      "messageContains":
+      - "already at the step target"
+      "observedGenerationCurrent": true
+    "decision":
+      "status": "True"
+      "reason": "MetricsAvailable"
+      "messageContains":
+      - "evaluated 1 of 1 metrics"
+      - "recommends 1 replicas"
+      "observedGenerationCurrent": true
+    "lastScaleTime": "unset"
+    "observedGenerationCurrent": true

@@ -10,3 +10,14 @@
   "replicas": 4
   "desired": 4
   "decisionStatus": "True"
+  "decisionReason": "DecisionReceived"
+  "decisionMessageContains":
+  - "decision server recommends 4 replicas"
+  "active":
+    "status": "True"
+    "reason": "DecisionReceived"
+    "messageContains":
+    - "decision server recommends 4 replicas"
+    "observedGenerationCurrent": true
+  "lastScaleTime": "set"
+  "observedGenerationCurrent": true

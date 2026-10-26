@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	autoscalingv1alpha1 "github.com/modelsphere/llm-operator/api/autoscaling/v1alpha1"
@@ -238,7 +239,9 @@ type recommendCustomFile struct {
 		AbsentCustomProvider bool   `json:"absentCustomProvider"`
 	} `json:"inputs"`
 	Expected struct {
-		Replicas int32 `json:"replicas"`
+		Replicas            int32  `json:"replicas"`
+		HoldReason          string `json:"holdReason"`
+		HoldMessageContains string `json:"holdMessageContains"`
 	} `json:"expected"`
 }
 
@@ -277,9 +280,23 @@ func TestRecommendReplicasCustomProvider(t *testing.T) {
 		key := types.NamespacedName{Namespace: "ns", Name: "s"}
 		// specReplicas is what "hold where it is" means. The files set it to the
 		// same figure as readyReplicas so a hold is not confused with a clamp.
-		got := r.recommendReplicas(context.Background(), scaler, key, in.ReadyReplicas, in.SpecReplicas)
+		got := r.recommendReplicas(context.Background(), scaler, key, in.ReadyReplicas, in.SpecReplicas).replicas
 		if got != tc.Expected.Replicas {
 			t.Fatalf("recommendReplicas = %d, want %d", got, tc.Expected.Replicas)
+		}
+		active := scalingActive(t, scaler)
+		if tc.Expected.HoldReason != "" {
+			if active.Status != metav1.ConditionFalse || active.Reason != tc.Expected.HoldReason {
+				t.Errorf("ScalingActive = %s/%s, want False/%s", active.Status, active.Reason, tc.Expected.HoldReason)
+			}
+		} else if active.Status != metav1.ConditionTrue || active.Reason != autoscalingv1alpha1.ReasonDecisionReceived {
+			t.Errorf("ScalingActive = %s/%s, want True/%s", active.Status, active.Reason, autoscalingv1alpha1.ReasonDecisionReceived)
+		} else if active.Message != fmt.Sprintf("decision server recommends %s replicas", in.Active) {
+			// The message names the server's count, before clamping.
+			t.Errorf("ScalingActive message = %q, want the raw decision", active.Message)
+		}
+		if sub := tc.Expected.HoldMessageContains; sub != "" && !strings.Contains(active.Message, sub) {
+			t.Errorf("ScalingActive message = %q, want it to contain %q", active.Message, sub)
 		}
 	})
 }
@@ -335,9 +352,15 @@ func TestRecommendReplicasDefaultProviderIsPrometheus(t *testing.T) {
 
 		r := &LLMScalerReconciler{}
 		key := types.NamespacedName{Namespace: "ns", Name: "s"}
-		got := r.recommendReplicas(context.Background(), scaler, key, tc.Inputs.ReadyReplicas, tc.Inputs.SpecReplicas)
+		got := r.recommendReplicas(context.Background(), scaler, key, tc.Inputs.ReadyReplicas, tc.Inputs.SpecReplicas).replicas
 		if got != tc.Expected.Replicas {
 			t.Errorf("recommendReplicas = %d, want %d", got, tc.Expected.Replicas)
+		}
+		active := scalingActive(t, scaler)
+		if active.Status != metav1.ConditionTrue || active.Reason != autoscalingv1alpha1.ReasonMetricsAvailable {
+			t.Errorf("ScalingActive = %+v, want True/%s", active, autoscalingv1alpha1.ReasonMetricsAvailable)
+		} else if !strings.Contains(active.Message, fmt.Sprintf("recommends %d replicas", tc.Expected.Replicas)) {
+			t.Errorf("ScalingActive message = %q, want the raw recommendation", active.Message)
 		}
 		if gotPath != tc.Expected.Path {
 			t.Errorf("path = %q, want %q", gotPath, tc.Expected.Path)

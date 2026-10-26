@@ -15,6 +15,17 @@
   "statusBy": "checking the failure is reported on the status"
 "expected":
   "replicas": 3
+  "desired": 3
   "decisionStatus": "False"
   "decisionReason": "DecisionUnavailable"
-  "decisionMessageNonEmpty": true
+  "decisionMessageContains":
+  - "custom provider returned no decision"
+  - "decision server"
+  "active":
+    "status": "False"
+    "reason": "DecisionUnavailable"
+    "messageContains":
+    - "custom provider returned no decision"
+    "observedGenerationCurrent": true
+  "lastScaleTime": "unset"
+  "observedGenerationCurrent": true

@@ -110,6 +110,10 @@ type stepInput struct {
 	RestoreStatus  bool           `json:"restoreStatus"`
 	SkipReconcile  bool           `json:"skipReconcile"`
 	SnapshotStatus bool           `json:"snapshotStatus"`
+	DeleteDeploy   bool           `json:"deleteDeploy"`
+	APIVersion     string         `json:"apiVersion"`
+	MaxReplicas    *int32         `json:"maxReplicas"`
+	CloseServer    bool           `json:"closeServer"`
 }
 
 type condInput struct {
@@ -117,6 +121,9 @@ type condInput struct {
 	Reason                    string   `json:"reason"`
 	MessageContains           []string `json:"messageContains"`
 	ObservedGenerationCurrent bool     `json:"observedGenerationCurrent"`
+	ObservedGenerationStale   bool     `json:"observedGenerationStale"`
+	// Absent requires the condition to be missing. Other fields must be unset.
+	Absent bool `json:"absent"`
 }
 
 func (c condInput) expect() condExpect {
@@ -125,6 +132,8 @@ func (c condInput) expect() condExpect {
 		reason:                    c.Reason,
 		messageContains:           c.MessageContains,
 		observedGenerationCurrent: c.ObservedGenerationCurrent,
+		observedGenerationStale:   c.ObservedGenerationStale,
+		absent:                    c.Absent,
 	}
 }
 
@@ -138,34 +147,57 @@ func (e eventInput) expect() eventExpect {
 }
 
 type stepExpected struct {
-	Replicas      *int32          `json:"replicas"`
-	Desired       *int32          `json:"desired"`
-	Applied       *int32          `json:"applied"`
-	Current       *int32          `json:"current"`
-	DeferredSince sinceCheck      `json:"deferredSince"`
-	Condition     *condInput      `json:"condition"`
-	RequeueAfter  *cases.Duration `json:"requeueAfter"`
-	Events        []eventInput    `json:"events"`
-	NoMoreEvents  bool            `json:"noMoreEvents"`
-	ForcedWrite   *bool           `json:"forcedWrite"`
-	ForcedWriteAt *cases.Duration `json:"forcedWriteAt"`
+	Replicas                            *int32          `json:"replicas"`
+	Desired                             *int32          `json:"desired"`
+	Applied                             *int32          `json:"applied"`
+	Current                             *int32          `json:"current"`
+	DeferredSince                       sinceCheck      `json:"deferredSince"`
+	Condition                           *condInput      `json:"condition"`
+	RequeueAfter                        *cases.Duration `json:"requeueAfter"`
+	Events                              []eventInput    `json:"events"`
+	NoMoreEvents                        bool            `json:"noMoreEvents"`
+	ForcedWrite                         *bool           `json:"forcedWrite"`
+	ForcedWriteAt                       *cases.Duration `json:"forcedWriteAt"`
+	Active                              *condInput      `json:"active"`
+	Decision                            *condInput      `json:"decision"`
+	Limited                             *condInput      `json:"limited"`
+	ObservedGenerationCurrent           bool            `json:"observedGenerationCurrent"`
+	ConditionsObservedGenerationCurrent bool            `json:"conditionsObservedGenerationCurrent"`
+	GenerationGreaterThan               int64           `json:"generationGreaterThan"`
+	LastScaleTime                       string          `json:"lastScaleTime"`
 }
 
 func (e stepExpected) expect() stepExpect {
 	out := stepExpect{
-		replicas:      e.Replicas,
-		desired:       e.Desired,
-		applied:       e.Applied,
-		current:       e.Current,
-		deferredSince: e.DeferredSince.expect(),
-		requeueAfter:  durPtr(e.RequeueAfter),
-		noMoreEvents:  e.NoMoreEvents,
-		forcedWrite:   e.ForcedWrite,
-		forcedWriteAt: durPtr(e.ForcedWriteAt),
+		replicas:                            e.Replicas,
+		desired:                             e.Desired,
+		applied:                             e.Applied,
+		current:                             e.Current,
+		deferredSince:                       e.DeferredSince.expect(),
+		requeueAfter:                        durPtr(e.RequeueAfter),
+		noMoreEvents:                        e.NoMoreEvents,
+		forcedWrite:                         e.ForcedWrite,
+		forcedWriteAt:                       durPtr(e.ForcedWriteAt),
+		observedGenerationCurrent:           e.ObservedGenerationCurrent,
+		conditionsObservedGenerationCurrent: e.ConditionsObservedGenerationCurrent,
+		generationGreaterThan:               e.GenerationGreaterThan,
+		lastScaleTime:                       parseLastScale(e.LastScaleTime),
 	}
 	if e.Condition != nil {
 		cond := e.Condition.expect()
 		out.condition = &cond
+	}
+	if e.Active != nil {
+		active := e.Active.expect()
+		out.active = &active
+	}
+	if e.Decision != nil {
+		decision := e.Decision.expect()
+		out.decision = &decision
+	}
+	if e.Limited != nil {
+		limited := e.Limited.expect()
+		out.limited = &limited
 	}
 	if len(e.Events) > 0 {
 		out.events = make([]eventExpect, len(e.Events))
@@ -186,6 +218,10 @@ func (s stepInput) step(exp stepExpected) scenarioStep {
 		restoreStatus:  s.RestoreStatus,
 		skipReconcile:  s.SkipReconcile,
 		snapshotStatus: s.SnapshotStatus,
+		deleteDeploy:   s.DeleteDeploy,
+		apiVersion:     s.APIVersion,
+		maxReplicas:    s.MaxReplicas,
+		closeServer:    s.CloseServer,
 		expect:         exp.expect(),
 	}
 	if s.Deploy != nil {
@@ -213,6 +249,7 @@ type scalerInputs struct {
 	CheckTerminating         *bool           `json:"checkTerminating"`
 	PlainReconciler          bool            `json:"plainReconciler"`
 	ExpectNilRecommendations bool            `json:"expectNilRecommendations"`
+	CloseServer              bool            `json:"closeServer"`
 	Steps                    []stepInput     `json:"steps"`
 }
 
@@ -247,6 +284,7 @@ func (c scalerCase) scenario() scalerScenario {
 		checkTerminating:         in.CheckTerminating,
 		plainReconciler:          in.PlainReconciler,
 		expectNilRecommendations: in.ExpectNilRecommendations,
+		closeServer:              in.CloseServer,
 		steps:                    steps,
 	}
 	if in.Deploy != nil {
@@ -274,29 +312,40 @@ type customReconcileFile struct {
 		StatusBy    string       `json:"statusBy"`
 	} `json:"inputs"`
 	Expected struct {
-		Replicas                int32  `json:"replicas"`
-		Desired                 *int32 `json:"desired"`
-		DecisionStatus          string `json:"decisionStatus"`
-		DecisionReason          string `json:"decisionReason"`
-		DecisionMessageNonEmpty bool   `json:"decisionMessageNonEmpty"`
+		Replicas                  int32      `json:"replicas"`
+		Desired                   *int32     `json:"desired"`
+		DecisionStatus            string     `json:"decisionStatus"`
+		DecisionReason            string     `json:"decisionReason"`
+		DecisionMessageNonEmpty   bool       `json:"decisionMessageNonEmpty"`
+		DecisionMessageContains   []string   `json:"decisionMessageContains"`
+		Active                    *condInput `json:"active"`
+		ObservedGenerationCurrent bool       `json:"observedGenerationCurrent"`
+		LastScaleTime             string     `json:"lastScaleTime"`
 	} `json:"expected"`
 }
 
 func runCustomReconcileFile(c customReconcileFile) {
 	exp := c.Expected
 	tc := customReconcileCase{
-		createBy:                c.Inputs.CreateBy,
-		deployBy:                c.Inputs.DeployBy,
-		closeServer:             c.Inputs.CloseServer,
-		closeBy:                 c.Inputs.CloseBy,
-		reconcileBy:             c.Inputs.ReconcileBy,
-		replicasBy:              c.Inputs.ReplicasBy,
-		wantReplicas:            exp.Replicas,
-		statusBy:                c.Inputs.StatusBy,
-		wantDesired:             exp.Desired,
-		decisionStatus:          metav1.ConditionStatus(exp.DecisionStatus),
-		decisionReason:          exp.DecisionReason,
-		decisionMessageNonEmpty: exp.DecisionMessageNonEmpty,
+		createBy:                  c.Inputs.CreateBy,
+		deployBy:                  c.Inputs.DeployBy,
+		closeServer:               c.Inputs.CloseServer,
+		closeBy:                   c.Inputs.CloseBy,
+		reconcileBy:               c.Inputs.ReconcileBy,
+		replicasBy:                c.Inputs.ReplicasBy,
+		wantReplicas:              exp.Replicas,
+		statusBy:                  c.Inputs.StatusBy,
+		wantDesired:               exp.Desired,
+		decisionStatus:            metav1.ConditionStatus(exp.DecisionStatus),
+		decisionReason:            exp.DecisionReason,
+		decisionMessageNonEmpty:   exp.DecisionMessageNonEmpty,
+		decisionMessageContains:   exp.DecisionMessageContains,
+		observedGenerationCurrent: exp.ObservedGenerationCurrent,
+		lastScaleTime:             parseLastScale(exp.LastScaleTime),
+	}
+	if exp.Active != nil {
+		active := exp.Active.expect()
+		tc.active = &active
 	}
 	if c.Inputs.Deploy != nil {
 		st := c.Inputs.Deploy.state()

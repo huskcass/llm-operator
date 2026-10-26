@@ -45,12 +45,16 @@ var _ = Describe("LLMScaler Controller", func() {
 			ginkgocases.Entries("testdata/controller/settle-guard", scalerDesc))
 		DescribeTable("stabilization and max step", runScalerCase,
 			ginkgocases.Entries("testdata/controller/stabilization-and-step", scalerDesc))
+		DescribeTable("scaling limited", runScalerCase,
+			ginkgocases.Entries("testdata/controller/scaling-limited", scalerDesc))
 		DescribeTable("deferral timeout", runScalerCase,
 			ginkgocases.Entries("testdata/controller/deferral-timeout", scalerDesc))
 		DescribeTable("deferral status", runScalerCase,
 			ginkgocases.Entries("testdata/controller/deferral-status", scalerDesc))
 		DescribeTable("forced-write pacing", runScalerCase,
 			ginkgocases.Entries("testdata/controller/forced-write-pacing", scalerDesc))
+		DescribeTable("condition status", runScalerCase,
+			ginkgocases.Entries("testdata/controller/condition-status", scalerDesc))
 
 		for _, f := range cases.MustLoad[deferDefaultFile]("testdata/controller/crd-default") {
 			tc := f.Case

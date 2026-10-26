@@ -30,6 +30,8 @@
   "steps":
   - {}
   - "replicas": 3
+    "lastScaleTime": "set"
+    "observedGenerationCurrent": true
   - {}
   - "replicas": 3
     "requeueAfter": "15s"
@@ -39,6 +41,7 @@
       "status": "True"
       "messageContains":
       - "forced write paced to one per sync period"
+    "lastScaleTime": "unchanged"
   - "replicas": 3
     "requeueAfter": "1s"
     "deferredSince": "0s"

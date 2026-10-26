@@ -27,6 +27,8 @@
       - "2026-03-01T12:00:00Z"
       - "will apply after 60s"
       "observedGenerationCurrent": true
+    "lastScaleTime": "unset"
+    "observedGenerationCurrent": true
     "events":
     - "prefix": "Normal ScalingDeferred"
       "contains":
@@ -42,11 +44,13 @@
     "applied": 2
     "requeueAfter": "15s"
     "condition":
-      "status": "False"
+      "status": "True"
       "reason": "DeferralTimedOut"
       "messageContains":
       - "scaling 1 -> 2 anyway"
       "observedGenerationCurrent": true
+    "lastScaleTime": "set"
+    "observedGenerationCurrent": true
     "events":
     - "prefix": "Warning DeferralTimedOut"
       "contains":

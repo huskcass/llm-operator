@@ -49,37 +49,183 @@ const (
 const DefaultDeferTimeoutSeconds int32 = 600
 
 // Condition types and reasons on LLMScalerStatus.Conditions.
+// The conditions are AbleToScale, ScalingActive, and ScalingLimited.
+// DecisionAvailable is deprecated and mirrors ScalingActive.
 const (
-	// ConditionDecisionAvailable is set under the Custom provider: true when the
-	// last sync got a decision, false (with the error as message) when it held
-	// replicas instead.
+	// ConditionAbleToScale reports whether this sync could scale the target.
+	// It is the HPA AbleToScale equivalent. True is the normal state. It stays
+	// True while a rollout or settle guard holds the write, when the deferral
+	// timeout forces that write, and when scale-down stabilization is applying
+	// a higher recent recommendation. False means this sync could not scale:
+	// targetRef.apiVersion does not parse (InvalidSpec), the target could not
+	// be read (TargetNotFound, TargetUnreadable), or the replica write failed
+	// (TargetWriteFailed).
+	//
+	// Precedence among True reasons, first match per sync:
+	//  1. A guard hold (RolloutInProgress or ScaleDownSettling), in every hold
+	//     case: deferring a write, a no-op while a deferral is already running,
+	//     and pacing a forced write. DeferralTimedOut is in this tier too,
+	//     when the timeout forces the write the guard was holding.
+	//  2. ScaleDownStabilized, when the stabilization window returned a value
+	//     higher than this sync's clamped recommendation. It is not a guard:
+	//     it does not start, keep, or clear deferredSince, and it does not
+	//     emit ScalingDeferred. A stabilized no-op with no guard ends a
+	//     deferral exactly as a Synced no-op does.
+	//  3. Synced.
+	ConditionAbleToScale = "AbleToScale"
+
+	// ConditionScalingActive means this sync has a usable scaling signal.
+	// It is the HPA ScalingActive equivalent. Both providers set it on every
+	// sync that reaches a recommendation, so switching metricProvider
+	// overwrites it. It does not reflect target read or write failures; those
+	// stay on AbleToScale.
+	//
+	// Custom, decision read: True / DecisionReceived, "decision server
+	// recommends N replicas". Custom, no decision: False /
+	// DecisionUnavailable, "custom provider returned no decision: <err>".
+	// Custom with spec.customProvider nil: False / InvalidSpec,
+	// "spec.customProvider is not set".
+	//
+	// Prometheus, at least one metric evaluated: True / MetricsAvailable,
+	// "evaluated K of M metrics; recommends N replicas". N is the raw maximum
+	// before clamping and stabilization. Prometheus, nothing evaluated: False
+	// / DecisionUnavailable. The message names prometheus and the last error,
+	// or says that no metric could be evaluated when there is no error. A
+	// non-200 Prometheus body quoted in that error is capped at 1 KiB.
+	//
+	// A sync that stops before the recommendation (targetRef.apiVersion does
+	// not parse, or the target cannot be read) does not touch this condition,
+	// and does not touch ScalingLimited either. A target write failure keeps
+	// the value computed earlier in that sync, and keeps the ScalingLimited
+	// computed with it.
+	ConditionScalingActive = "ScalingActive"
+
+	// ConditionScalingLimited reports whether a limit bound the replica count
+	// this sync. It is the HPA ScalingLimited equivalent. True means the raw
+	// provider count was outside min/max, or spec.scaleDown.maxStepReplicas
+	// capped the write. False / DesiredWithinRange means the count was inside
+	// the acceptable range. It is informational.
+	//
+	// It is set only when ScalingActive is True this sync, at the moment the
+	// recommendation is computed and before the target write, so a write
+	// failure persists it the way ScalingActive is persisted. When
+	// ScalingActive is False this sync it is left as it is, including on
+	// the first sync where it may be absent. An unparseable targetRef.apiVersion
+	// and a failed target read stop before a recommendation and leave it as
+	// it is too. There is no ScaleUpLimit: scale-up is never capped.
+	//
+	// Precedence, the constraint that bound the final write:
+	//  1. ScaleDownLimit when the step cap changed the write
+	//     (targetReplicas != recommendedReplicas).
+	//  2. TooFewReplicas when the raw provider count, before clamping and
+	//     before stabilization, is below minReplicas. TooManyReplicas when
+	//     that raw count is above maxReplicas. TooFewReplicas is checked
+	//     first.
+	//  3. DesiredWithinRange otherwise.
+	//
+	// Stabilization lifting the count afterwards does not clear a clamp
+	// reason. Only the step cap outranks the clamp.
+	ConditionScalingLimited = "ScalingLimited"
+
+	// ConditionDecisionAvailable is written with the same status, reason,
+	// message, observedGeneration, and set points as ConditionScalingActive.
+	//
+	// Deprecated: mirrors ScalingActive; will be removed in a future release.
 	ConditionDecisionAvailable = "DecisionAvailable"
 
-	// ConditionScalingDeferred is true while a rollout or settle guard is holding
-	// a scale action back, including a no-op sync whose deferral clock is still
-	// running. It is false when this sync wrote (a normal write or one forced
-	// after the timeout) or when nothing is deferred.
-	ConditionScalingDeferred = "ScalingDeferred"
-
-	ReasonDecisionReceived    = "DecisionReceived"
+	// ReasonDecisionReceived means the Custom provider read a decision this
+	// sync. ScalingActive is True with this reason.
+	ReasonDecisionReceived = "DecisionReceived"
+	// ReasonDecisionUnavailable means this sync has no usable scaling signal,
+	// so the replica count was held at spec.replicas, apart from the min/max
+	// bounds. Both providers use it: Custom when the decision server returned
+	// nothing, Prometheus when no metric could be evaluated. ScalingActive is
+	// False with this reason. AbleToScale still describes the scale decision.
+	// ScalingLimited is left as it is.
 	ReasonDecisionUnavailable = "DecisionUnavailable"
 
 	// ReasonRolloutInProgress means a Deployment rollout is in progress, so the
-	// scale action is held in both directions.
+	// scale action is held in both directions. AbleToScale is True with this
+	// reason: the target can be scaled, and the guard is holding the write.
 	ReasonRolloutInProgress = "RolloutInProgress"
 	// ReasonScaleDownSettling means a scale-down is waiting for the target to
-	// finish absorbing the previous replica count.
+	// finish absorbing the previous replica count. AbleToScale is True with
+	// this reason.
 	ReasonScaleDownSettling = "ScaleDownSettling"
 	// ReasonDeferralTimedOut means the scale action was held longer than
 	// spec.deferTimeoutSeconds and was applied anyway. The value matches the
-	// DeferralTimedOut event. The deferral clock keeps running when the guard
-	// still matches.
+	// DeferralTimedOut event. AbleToScale is True with this reason. The
+	// deferral clock keeps running when the guard still matches. It outranks
+	// ScaleDownStabilized.
 	ReasonDeferralTimedOut = "DeferralTimedOut"
-	// ReasonNotDeferred means this sync found no guard matching: it wrote, or
-	// it was a no-op that did not have a deferral in progress. A no-op does not
-	// start a deferral, and a no-op while a guard still matches is not this
-	// reason when deferredSince is already set.
-	ReasonNotDeferred = "NotDeferred"
+
+	// ReasonScaleDownStabilized means the scale-down stabilization window
+	// returned a value higher than this sync's clamped recommendation, and no
+	// guard hold or DeferralTimedOut described the write. AbleToScale is True
+	// with this reason. The message is HPA's: "recent recommendations were
+	// higher than current one, applying the highest recent recommendation".
+	// It is not a guard. It does not start, keep, or clear deferredSince, and
+	// it does not emit ScalingDeferred. A stabilized no-op with no guard ends
+	// a deferral exactly as a Synced no-op does.
+	// A following guard treats a previous ScaleDownStabilized as a changed
+	// reason, the same way it treats Synced, and emits ScalingDeferred once.
+	ReasonScaleDownStabilized = "ScaleDownStabilized"
+
+	// ReasonSynced means the last sync completed cleanly. It is the AbleToScale
+	// reason when no guard holds and stabilization did not raise the
+	// recommendation: a normal write, or a no-op with no deferral running.
+	// deferredSince is cleared in that case.
+	ReasonSynced = "Synced"
+	// ReasonMetricsAvailable means the Prometheus provider evaluated at least
+	// one metric this sync. ScalingActive is True with this reason. The
+	// replica count in the message is the raw maximum across those metrics,
+	// before clamping to min/max and before scale-down stabilization.
+	ReasonMetricsAvailable = "MetricsAvailable"
+	// ReasonInvalidSpec means the scaler cannot be reconciled as written.
+	// On AbleToScale it means targetRef.apiVersion does not parse, and the
+	// sync stops. On ScalingActive it is set when metricProvider is Custom
+	// and customProvider is not set; AbleToScale still describes the scale
+	// decision in that case. A missing target is reported first, so
+	// AbleToScale is TargetNotFound and ScalingActive is not evaluated when
+	// both apply.
+	ReasonInvalidSpec = "InvalidSpec"
+	// ReasonTargetNotFound means getting the scale target returned NotFound.
+	// AbleToScale is False. ScalingActive, ScalingLimited, deferredSince, and
+	// the replica counts are left as they are.
+	ReasonTargetNotFound = "TargetNotFound"
+	// ReasonTargetUnreadable means getting the scale target failed for a
+	// reason other than NotFound. AbleToScale is False. ScalingActive,
+	// ScalingLimited, deferredSince, and the replica counts are left as they
+	// are.
+	ReasonTargetUnreadable = "TargetUnreadable"
+	// ReasonTargetWriteFailed means setting or updating spec.replicas on the
+	// scale target failed. AbleToScale is False. The ScalingActive and
+	// ScalingLimited computed earlier in that sync are kept. deferredSince
+	// and the replica counts are left as they are.
+	ReasonTargetWriteFailed = "TargetWriteFailed"
+
+	// ReasonTooFewReplicas means the raw provider count, before clamping and
+	// before stabilization, was below minReplicas, and the step cap did not
+	// change the write. ScalingLimited is True. Message: "the desired replica
+	// count is less than the minimum replica count".
+	ReasonTooFewReplicas = "TooFewReplicas"
+	// ReasonTooManyReplicas means the raw provider count, before clamping and
+	// before stabilization, was above maxReplicas, and neither the step cap
+	// nor TooFewReplicas applied. ScalingLimited is True. Message: "the
+	// desired replica count is more than the maximum replica count".
+	ReasonTooManyReplicas = "TooManyReplicas"
+	// ReasonDesiredWithinRange means this sync had a usable signal and neither
+	// the min/max clamp nor the scale-down step cap bound the write.
+	// ScalingLimited is False. Message: "the desired count is within the
+	// acceptable range".
+	ReasonDesiredWithinRange = "DesiredWithinRange"
+	// ReasonScaleDownLimit means spec.scaleDown.maxStepReplicas capped this
+	// sync's write (the step target differed from the recommendation). It is
+	// the HPA behavior rate limit. ScalingLimited is True, and it wins over a
+	// min/max clamp on the same sync. Message: "the desired replica count is
+	// decreasing faster than the maximum scale rate (maxStepReplicas N)".
+	// There is no ScaleUpLimit because scale-up is never capped.
+	ReasonScaleDownLimit = "ScaleDownLimit"
 )
 
 // CustomProviderSpec configures the "Custom" metric provider: an external
@@ -102,7 +248,8 @@ const (
 //
 // A request that fails, a reply in an unknown schema, and a reply with no
 // matching decision are all treated the way an unevaluable metric is: that sync
-// is skipped and the replica count is held where it is, never read as zero.
+// is skipped and the replica count is held at spec.replicas, apart from the
+// min/max bounds, never read as zero.
 type CustomProviderSpec struct {
 	// serviceId names the service whose decision to read. It is sent as the
 	// serviceId query parameter and is also matched against
@@ -140,7 +287,7 @@ type MetricSpec struct {
 	// aggregate away every label the source varies on (backend, model, route,
 	// pod). A query that errors, returns no data, or returns NaN/Inf is skipped
 	// for that sync rather than read as zero; if every metric is skipped the
-	// replica count is held where it is.
+	// replica count is held at spec.replicas, apart from the min/max bounds.
 	Query string `json:"query"`
 
 	// target is the desired per-replica value of the query result. When the
@@ -322,7 +469,22 @@ type LLMScalerStatus struct {
 	// +optional
 	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
 
-	// conditions represent the current state of the LLMScaler resource.
+	// observedGeneration is the most recent generation observed by the
+	// controller. It is set to metadata.generation on every status write.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// lastScaleTime is when the controller last successfully wrote
+	// spec.replicas on the target, taken from the reconciler clock. It is set
+	// on a normal write and on a write forced after the deferral timeout, and
+	// left unchanged on every other sync: a no-op, a deferral, pacing, or an
+	// error.
+	// +optional
+	LastScaleTime *metav1.Time `json:"lastScaleTime,omitempty"`
+
+	// conditions represent the current state of the LLMScaler resource:
+	// AbleToScale, ScalingActive, and ScalingLimited. DecisionAvailable is
+	// deprecated and mirrors ScalingActive.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -335,7 +497,9 @@ type LLMScalerStatus struct {
 // +kubebuilder:printcolumn:name="MaxReplicas",type="integer",JSONPath=".spec.maxReplicas",description="The upper limit for the number of replicas"
 // +kubebuilder:printcolumn:name="CurrentReplicas",type="integer",JSONPath=".status.currentReplicas",description="The current number of replicas"
 // +kubebuilder:printcolumn:name="DesiredReplicas",type="integer",JSONPath=".status.desiredReplicas",description="The desired number of replicas"
-// +kubebuilder:printcolumn:name="Deferred",type="string",JSONPath=".status.conditions[?(@.type==\"ScalingDeferred\")].status",description="Whether a scale action is currently deferred"
+// +kubebuilder:printcolumn:name="Active",type="string",JSONPath=".status.conditions[?(@.type==\"ScalingActive\")].status",description="Whether a usable scaling signal was received"
+// +kubebuilder:printcolumn:name="AbleToScale",type="string",JSONPath=".status.conditions[?(@.type==\"AbleToScale\")].status",description="Whether this sync could scale the target"
+// +kubebuilder:printcolumn:name="Scaling",type="string",JSONPath=".status.conditions[?(@.type==\"AbleToScale\")].reason",description="The AbleToScale reason: Synced, a guard hold (RolloutInProgress, ScaleDownSettling), DeferralTimedOut, ScaleDownStabilized while the stabilization window keeps the count, or a failure"
 
 // LLMScaler is the Schema for the llmscalers API
 type LLMScaler struct {

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -303,21 +304,68 @@ type promScalarFile struct {
 	Description string `json:"description,omitempty"`
 	Inputs      struct {
 		Result string `json:"result"`
+		// Status, when set, is a non-200 reply. ErrorBodyBytes is the body
+		// length; a marker is written at offset 1024 so a 1 KiB cap drops it.
+		Status         int `json:"status"`
+		ErrorBodyBytes int `json:"errorBodyBytes"`
 	} `json:"inputs"`
 	Expected struct {
 		Value         float64  `json:"value"`
 		ErrorContains []string `json:"errorContains"`
+		// TruncatedBodyBytes is the exact length of the body quoted in the
+		// error. The quoted bytes are 'A', and the marker past that offset
+		// must be absent. That error is what ScalingActive quotes.
+		TruncatedBodyBytes int `json:"truncatedBodyBytes"`
 	} `json:"expected"`
 }
 
 func TestQueryPrometheusScalar(t *testing.T) {
 	cases.Run(t, "testdata/helpers/query-prometheus-scalar", func(t *testing.T, tc promScalarFile) {
+		const pastLimit = "PAST-THE-LIMIT"
+		var errorBody []byte
+		if tc.Inputs.Status != 0 {
+			if tc.Inputs.Status < 100 || tc.Inputs.Status > 999 {
+				t.Fatalf("status %d", tc.Inputs.Status)
+			}
+			if tc.Inputs.ErrorBodyBytes <= len(pastLimit)+1024 {
+				t.Fatalf("errorBodyBytes %d must extend past 1 KiB", tc.Inputs.ErrorBodyBytes)
+			}
+			errorBody = bytes.Repeat([]byte{'A'}, tc.Inputs.ErrorBodyBytes)
+			copy(errorBody[1024:], pastLimit)
+		} else if tc.Inputs.ErrorBodyBytes != 0 {
+			t.Fatal("errorBodyBytes requires status")
+		}
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if tc.Inputs.Status != 0 {
+				w.WriteHeader(tc.Inputs.Status)
+				_, _ = w.Write(errorBody)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"status":"success","data":{"result":%s}}`, tc.Inputs.Result)
 		}))
 		defer srv.Close()
 
 		got, err := queryPrometheusScalar(srv.URL, "some_query", nil)
+		if tc.Expected.TruncatedBodyBytes > 0 {
+			if err == nil {
+				t.Fatal("expected a truncated non-200 error")
+			}
+			prefix := fmt.Sprintf("prometheus returned status %d: ", tc.Inputs.Status)
+			rest, ok := strings.CutPrefix(err.Error(), prefix)
+			if !ok {
+				t.Fatalf("error = %q, want prefix %q", err, prefix)
+			}
+			want := strings.Repeat("A", tc.Expected.TruncatedBodyBytes)
+			if rest != want {
+				t.Fatalf("quoted body length %d, want %d of 'A' and not %s", len(rest), tc.Expected.TruncatedBodyBytes, pastLimit)
+			}
+			if strings.Contains(err.Error(), pastLimit) {
+				t.Fatalf("error quotes the body past 1 KiB: %q", err)
+			}
+			if len(tc.Expected.ErrorContains) == 0 {
+				return
+			}
+		}
 		if len(tc.Expected.ErrorContains) == 0 {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -388,6 +436,24 @@ func TestComputeDesiredFromMetrics(t *testing.T) {
 		}
 		if desired != tc.Expected.Desired {
 			t.Errorf("desired = %d, want %d", desired, tc.Expected.Desired)
+		}
+		active := scalingActive(t, scaler)
+		if !tc.Expected.Have {
+			if active.Status != metav1.ConditionFalse || active.Reason != autoscalingv1alpha1.ReasonDecisionUnavailable {
+				t.Errorf("ScalingActive = %s/%s, want False/%s", active.Status, active.Reason, autoscalingv1alpha1.ReasonDecisionUnavailable)
+			}
+			if !strings.Contains(active.Message, "no prometheus metric could be evaluated") {
+				t.Errorf("ScalingActive message = %q, want it to name prometheus", active.Message)
+			}
+		} else {
+			if active.Status != metav1.ConditionTrue || active.Reason != autoscalingv1alpha1.ReasonMetricsAvailable {
+				t.Errorf("ScalingActive = %s/%s, want True/%s", active.Status, active.Reason, autoscalingv1alpha1.ReasonMetricsAvailable)
+			}
+			// The message names the raw maximum, which this helper returns before clamping.
+			want := fmt.Sprintf("recommends %d replicas", desired)
+			if !strings.Contains(active.Message, want) || !strings.Contains(active.Message, "evaluated 1 of 1 metrics") {
+				t.Errorf("ScalingActive message = %q, want it to contain %q and the evaluation count", active.Message, want)
+			}
 		}
 	})
 }
